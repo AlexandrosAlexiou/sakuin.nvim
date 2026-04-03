@@ -1,0 +1,24 @@
+# Rust
+rust/target/
+rust/Cargo.lock
+
+# Sakuin index
+.sakuin/
+
+# Build artifacts (prebuilt binaries go here)
+build/*
+!build/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Neovim
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.iml
