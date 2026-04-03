@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.check }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [test, clippy, fmt]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: cargo test
+        if: matrix.check == 'test'
+        run: cargo test --manifest-path rust/Cargo.toml -- --test-threads=1
+
+      - name: cargo clippy
+        if: matrix.check == 'clippy'
+        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+
+      - name: cargo fmt
+        if: matrix.check == 'fmt'
+        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
