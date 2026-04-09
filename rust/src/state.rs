@@ -87,19 +87,16 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
 
 /// Shut down the engine: stop watcher, stop worker, commit pending writes, drop state.
 pub fn shutdown() {
-    // Stop the persistent search worker first
     search_worker_shutdown();
 
     let mut guard = global_state().lock();
     if let Some(state) = guard.take() {
-        // Stop watcher if running
         {
             let mut watcher_guard = state.watcher_handle.lock();
             if let Some(handle) = watcher_guard.take() {
                 handle.stop();
             }
         }
-        // Commit any pending writes
         {
             let mut writer = state.writer.lock();
             let _ = writer.commit();
@@ -260,7 +257,6 @@ pub fn build_index() -> Result<u64, String> {
         // doc_tx dropped here — closes the channel and unblocks the writer loop.
     });
 
-    // Writer (current thread): drain the channel while the reader is running.
     let mut indexed_count: u64 = 0;
     let mut error_count: u64 = 0;
     for result in doc_rx {
@@ -347,7 +343,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         })
         .collect();
 
-    // Phase 1: Remove files that no longer exist on disk
     let mut removed: u64 = 0;
     for indexed_path in indexed_mtimes.keys() {
         if !disk_set.contains(indexed_path) {
@@ -394,7 +389,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     });
     notify_main_thread();
 
-    // Delete old docs for changed files
     for (file_path, is_update) in &files_to_index {
         if *is_update {
             let rel_path = file_path
@@ -688,10 +682,9 @@ fn notify_main_thread() {
 /// The main loop of the persistent search worker thread.
 fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<AtomicBool>) {
     loop {
-        // Block waiting for the next request
         let request = match rx.recv() {
             Ok(req) => req,
-            Err(_) => break, // channel disconnected, shut down
+            Err(_) => break,
         };
 
         if request.is_shutdown() {
@@ -707,24 +700,20 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             latest = newer;
         }
 
-        // Clear the queue of any stale messages from a previous search
         {
             search_result_queue().lock().clear();
         }
 
-        // Reset the cancel flag for this search
         cancel_flag.store(false, Ordering::SeqCst);
 
         let generation = latest.generation;
         let batch_size = latest.batch_size;
         let limit = latest.limit;
 
-        // Shared counter for cumulative results emitted
         let total_so_far = Arc::new(AtomicU64::new(0));
         let total_ref = total_so_far.clone();
         let cancel_ref = cancel_flag.clone();
 
-        // Execute the streaming search
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let params = search::SearchParams {
                 reader: &latest.reader,
@@ -746,7 +735,6 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                                 results_json: json,
                                 total_so_far: cumulative,
                             });
-                        // Wake the main thread for each batch
                         notify_main_thread();
                     }
                     Err(e) => {
@@ -761,7 +749,6 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             continue;
         }
 
-        // Push the terminal message (Done or Error)
         let total = total_so_far.load(Ordering::Relaxed);
         match result {
             Ok(Ok(())) => {
@@ -787,7 +774,6 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             }
         }
 
-        // Wake the main thread for the terminal message
         notify_main_thread();
     }
 }
@@ -848,9 +834,7 @@ pub fn search_cancel() {
 fn search_worker_shutdown() {
     let mut guard = search_worker_state().lock();
     if let Some(worker) = guard.take() {
-        // Signal cancellation so current search exits
         worker.cancel_flag.store(true, Ordering::SeqCst);
-        // Send shutdown sentinel
         let _ = worker.sender.send(SearchRequest {
             query: String::new(),
             generation: 0,
