@@ -69,6 +69,10 @@ jobs:
           src="rust/target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
           cp "$src" "${{ matrix.artifact_name }}"
 
+      - name: Ad-hoc codesign (macOS)
+        if: runner.os == 'macOS'
+        run: codesign --sign - --force "${{ matrix.artifact_name }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

@@ -91,9 +91,12 @@ function M.download(version)
 		return false, "Download failed. URL: " .. url
 	end
 
-	-- Make executable on Unix
+	-- Make executable on Unix and strip macOS quarantine attribute
 	if jit.os ~= "Windows" then
 		os.execute("chmod +x " .. vim.fn.shellescape(dest))
+	end
+	if jit.os == "OSX" then
+		os.execute("xattr -d com.apple.quarantine " .. vim.fn.shellescape(dest) .. " 2>/dev/null")
 	end
 
 	print("[sakuin] Downloaded to " .. dest)
