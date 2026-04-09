@@ -191,6 +191,12 @@ where
         return Ok(());
     }
 
+    // Lowercased terms for line-level literal matching.
+    let search_terms: Arc<Vec<String>> = Arc::new(terms.iter().map(|t| t.to_lowercase()).collect());
+
+    // Build Tantivy query for candidate document retrieval.
+    // Terms are split into alphanumeric chunks to match how Tantivy's
+    // tokenizer indexes text (punctuation is stripped during indexing).
     let term_queries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = terms
         .iter()
         .map(|t| build_query_for_term(t, &default_fields).map(|q| (Occur::Must, q)))
@@ -212,23 +218,6 @@ where
     if params.cancelled.load(Ordering::Relaxed) {
         return Ok(());
     }
-
-    // The literal terms (whitespace-separated) for line-level matching.
-    let literal_terms: Vec<String> = extract_literal_terms(params.query_str)
-        .into_iter()
-        .map(|t| t.to_lowercase())
-        .collect();
-
-    if literal_terms.is_empty() {
-        return Ok(());
-    }
-
-    let search_terms: Arc<Vec<SearchTerm>> = Arc::new(
-        literal_terms
-            .into_iter()
-            .map(|lit| SearchTerm { literal: lit })
-            .collect(),
-    );
 
     let doc_infos: Vec<(String, std::path::PathBuf)> = top_docs
         .into_iter()
@@ -256,9 +245,7 @@ where
             if matches.is_empty() {
                 // No content-line matches — check if path matches any term.
                 let path_lower = rel_path.to_lowercase();
-                let path_match = search_terms
-                    .iter()
-                    .any(|t| term_matches_str(t, &path_lower));
+                let path_match = search_terms.iter().any(|t| path_lower.contains(t.as_str()));
                 if path_match {
                     total_emitted.fetch_add(1, Ordering::Relaxed);
                     vec![SearchResult {
@@ -281,7 +268,7 @@ where
                 //  2. file_density — log2(match_count) / 10, so a file with
                 //     32 matches gets +0.5 and a file with 1 match gets 0.
                 //     Keeps file-level signal without drowning per-line signal.
-                let query_len: usize = search_terms.iter().map(|t| t.literal.len()).sum();
+                let query_len: usize = search_terms.iter().map(|t| t.len()).sum();
                 let file_density = (matches.len() as f32).log2().max(0.0) / 10.0;
 
                 let file_results: Vec<SearchResult> = matches
@@ -328,33 +315,13 @@ where
     Ok(())
 }
 
-/// A pre-processed search term for line-level matching.
-struct SearchTerm {
-    /// The original user term, lowercased (e.g. `"ffi::"`, `"vec3<f32>"`).
-    literal: String,
-}
-
-/// Check if a search term matches within a lowercased string.
-///
-/// Pure literal substring match — the exact user term must appear in the
-/// haystack. This ensures that `"ffi::"` only matches lines containing
-/// `ffi::` and not lines with bare `ffi`.
-fn term_matches_str(term: &SearchTerm, haystack: &str) -> bool {
-    haystack.contains(term.literal.as_str())
-}
-
-/// Find the column position where a term matches in a lowercased string.
-fn term_find_in_str(term: &SearchTerm, haystack: &str) -> Option<usize> {
-    haystack.find(term.literal.as_str())
-}
-
 /// Find all lines in a file that contain at least one of the given search terms.
 ///
-/// A line matches if ANY term appears as a case-insensitive substring.
+/// Each term is matched as a case-insensitive literal substring.
 /// Returns `(line_number, col, snippet)` for each matching line.
 fn find_matching_lines(
     file_path: &Path,
-    terms: &[SearchTerm],
+    terms: &[String],
     cancelled: &Arc<AtomicBool>,
 ) -> Vec<(u32, u32, String)> {
     let contents = match fs::read_to_string(file_path) {
@@ -379,7 +346,7 @@ fn find_matching_lines(
         // Find the earliest matching column across all terms.
         let best_col = terms
             .iter()
-            .filter_map(|t| term_find_in_str(t, line_lower))
+            .filter_map(|t| line_lower.find(t.as_str()))
             .min();
 
         if let Some(col) = best_col {
