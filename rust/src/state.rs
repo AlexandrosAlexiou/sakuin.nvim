@@ -415,23 +415,25 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let done_ref = done_counter.clone();
 
     let reader = std::thread::spawn(move || {
-        files_to_index.par_iter().for_each(|(file_path, is_update)| {
-            let result = prepare_doc(&project_root, file_path);
-            let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
-            prog.done.store(count, Ordering::Relaxed);
-            if count.is_multiple_of(100) {
-                let total = prog.total.load(Ordering::Relaxed);
-                *indexing_event_slot().lock() = Some(IndexingEvent {
-                    total,
-                    done: count,
-                    status: "progress",
-                    error: None,
-                    message: None,
-                });
-                notify_main_thread();
-            }
-            let _ = doc_tx.send((result, *is_update));
-        });
+        files_to_index
+            .par_iter()
+            .for_each(|(file_path, is_update)| {
+                let result = prepare_doc(&project_root, file_path);
+                let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
+                prog.done.store(count, Ordering::Relaxed);
+                if count.is_multiple_of(100) {
+                    let total = prog.total.load(Ordering::Relaxed);
+                    *indexing_event_slot().lock() = Some(IndexingEvent {
+                        total,
+                        done: count,
+                        status: "progress",
+                        error: None,
+                        message: None,
+                    });
+                    notify_main_thread();
+                }
+                let _ = doc_tx.send((result, *is_update));
+            });
     });
 
     let mut added: u64 = 0;
