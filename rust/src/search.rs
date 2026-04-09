@@ -21,7 +21,6 @@ pub struct SearchParams<'a> {
     pub cancelled: &'a Arc<AtomicBool>,
 }
 
-
 /// Build a substring-match query for a single literal chunk across multiple fields.
 ///
 /// Creates a `RegexQuery` with pattern `.*<chunk>.*` for each field so that
@@ -131,8 +130,9 @@ fn regex_escape(literal: &str) -> String {
     escaped
 }
 
-/// Score boost for lines containing the exact literal query term (case-insensitive).
-const EXACT_MATCH_BOOST: f32 = 1_000_000.0;
+/// Score for path-only matches (no content line). Ranks below any content
+/// match (which scores > 0 based on query-to-line ratio and file density).
+const PATH_MATCH_SCORE: f32 = 0.0;
 
 /// Search the index and return results with file path, line number, and snippet.
 ///
@@ -214,7 +214,6 @@ where
     }
 
     // The literal terms (whitespace-separated) for line-level matching.
-    // We also pre-compute lowercased alphanumeric-only versions for fallback.
     let literal_terms: Vec<String> = extract_literal_terms(params.query_str)
         .into_iter()
         .map(|t| t.to_lowercase())
@@ -227,27 +226,17 @@ where
     let search_terms: Arc<Vec<SearchTerm>> = Arc::new(
         literal_terms
             .into_iter()
-            .map(|lit| {
-                let alnum: String = lit.chars().filter(|c| c.is_alphanumeric()).collect();
-                SearchTerm {
-                    literal: lit.clone(),
-                    alphanumeric: if alnum != lit && !alnum.is_empty() {
-                        Some(alnum)
-                    } else {
-                        None
-                    },
-                }
-            })
+            .map(|lit| SearchTerm { literal: lit })
             .collect(),
     );
 
-    let doc_infos: Vec<(f32, String, std::path::PathBuf)> = top_docs
+    let doc_infos: Vec<(String, std::path::PathBuf)> = top_docs
         .into_iter()
-        .filter_map(|(score, doc_address)| {
+        .filter_map(|(_score, doc_address)| {
             let doc: TantivyDocument = searcher.doc(doc_address).ok()?;
             let rel_path = doc.get_first(path_field)?.as_str()?.to_string();
             let abs_path = params.project_root.join(&rel_path);
-            Some((score, rel_path, abs_path))
+            Some((rel_path, abs_path))
         })
         .collect();
 
@@ -255,7 +244,7 @@ where
 
     let mut results: Vec<SearchResult> = doc_infos
         .par_iter()
-        .flat_map_iter(|(score, rel_path, abs_path)| {
+        .flat_map_iter(|(rel_path, abs_path)| {
             if params.cancelled.load(Ordering::Relaxed)
                 || total_emitted.load(Ordering::Relaxed) >= limit
             {
@@ -277,20 +266,36 @@ where
                         line: 0,
                         col: 0,
                         snippet: String::new(),
-                        score: *score + EXACT_MATCH_BOOST,
+                        score: PATH_MATCH_SCORE,
                     }]
                 } else {
                     vec![]
                 }
             } else {
+                // Scoring: rank results so the most "exact" matches appear first.
+                //
+                // Components (all ≥ 0, combined additively):
+                //  1. query_ratio  — how much of the line the query covers.
+                //     A line that IS the query scores ~1.0; a 200-char line
+                //     where the query is 4 chars scores ~0.02.
+                //  2. file_density — log2(match_count) / 10, so a file with
+                //     32 matches gets +0.5 and a file with 1 match gets 0.
+                //     Keeps file-level signal without drowning per-line signal.
+                let query_len: usize = search_terms.iter().map(|t| t.literal.len()).sum();
+                let file_density = (matches.len() as f32).log2().max(0.0) / 10.0;
+
                 let file_results: Vec<SearchResult> = matches
                     .into_iter()
-                    .map(|(line, col, snippet)| SearchResult {
-                        path: rel_path.clone(),
-                        line,
-                        col,
-                        snippet,
-                        score: *score + EXACT_MATCH_BOOST,
+                    .map(|(line, col, snippet)| {
+                        let line_len = snippet.len().max(1) as f32;
+                        let query_ratio = (query_len as f32 / line_len).min(1.0);
+                        SearchResult {
+                            path: rel_path.clone(),
+                            line,
+                            col,
+                            snippet,
+                            score: query_ratio + file_density,
+                        }
                     })
                     .collect();
 
@@ -325,36 +330,22 @@ where
 
 /// A pre-processed search term for line-level matching.
 struct SearchTerm {
-    /// The original user term, lowercased (e.g. `"vec3<>"`).
+    /// The original user term, lowercased (e.g. `"ffi::"`, `"vec3<f32>"`).
     literal: String,
-    /// Alphanumeric-only version, if different from literal (e.g. `"vec3"`).
-    /// Used as fallback for terms containing symbols.
-    alphanumeric: Option<String>,
 }
 
 /// Check if a search term matches within a lowercased string.
 ///
-/// First tries the full literal. If the literal contains non-alphanumeric chars
-/// and didn't match, falls back to matching just the alphanumeric part.
+/// Pure literal substring match — the exact user term must appear in the
+/// haystack. This ensures that `"ffi::"` only matches lines containing
+/// `ffi::` and not lines with bare `ffi`.
 fn term_matches_str(term: &SearchTerm, haystack: &str) -> bool {
-    if haystack.contains(term.literal.as_str()) {
-        return true;
-    }
-    if let Some(ref alnum) = term.alphanumeric {
-        return haystack.contains(alnum.as_str());
-    }
-    false
+    haystack.contains(term.literal.as_str())
 }
 
 /// Find the column position where a term matches in a lowercased string.
 fn term_find_in_str(term: &SearchTerm, haystack: &str) -> Option<usize> {
-    if let Some(pos) = haystack.find(term.literal.as_str()) {
-        return Some(pos);
-    }
-    if let Some(ref alnum) = term.alphanumeric {
-        return haystack.find(alnum.as_str());
-    }
-    None
+    haystack.find(term.literal.as_str())
 }
 
 /// Find all lines in a file that contain at least one of the given search terms.
@@ -703,6 +694,71 @@ mod tests {
         assert!(
             !results.is_empty(),
             "Expected 'std::vector' to match file containing 'std::vector<int>'"
+        );
+    }
+
+    #[test]
+    fn test_trailing_double_colon_query() {
+        // "ffi::" should match lines containing "ffi::" (e.g. "ffi::CString")
+        // but should NOT match lines that only contain "ffi" without "::"
+        let (reader, schema, dir) =
+            setup_test_index(&[("lib.rs", "use std::ffi::CString;\nlet ffi = something();\n")]);
+
+        let results = do_search(&reader, &schema, dir.path(), "ffi::");
+        assert!(
+            !results.is_empty(),
+            "Expected 'ffi::' to match line containing 'ffi::CString'"
+        );
+        // Should only match the line with "ffi::", not the line with bare "ffi"
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected exactly 1 result for 'ffi::' (the line with 'ffi::CString'), got {}",
+            results.len()
+        );
+        assert!(
+            results[0].snippet.contains("ffi::CString"),
+            "Expected the matching line to contain 'ffi::CString', got: {}",
+            results[0].snippet
+        );
+    }
+
+    #[test]
+    fn test_trailing_punctuation_does_not_match_bare_word() {
+        // Searching "foo::" should not match a line that only contains "foo"
+        let (reader, schema, dir) = setup_test_index(&[("bare.rs", "let foo = 42;\n")]);
+
+        let results = do_search(&reader, &schema, dir.path(), "foo::");
+        assert!(
+            results.is_empty(),
+            "Expected 'foo::' to NOT match line with bare 'foo' (no '::')"
+        );
+    }
+
+    #[test]
+    fn test_exact_match_scores_highest() {
+        // A short line that is almost entirely the query should score higher
+        // than a long line that merely contains it.
+        let (reader, schema, dir) = setup_test_index(&[(
+            "mixed.rs",
+            concat!(
+                "use std::ffi::CString;\n",                             // long line
+                "ffi::CString\n",                                       // exact-ish
+                "let x = some_very_long_thing(ffi::CString, other);\n", // long line
+            ),
+        )]);
+
+        let results = do_search(&reader, &schema, dir.path(), "ffi::CString");
+        assert!(
+            results.len() == 3,
+            "Expected 3 results, got {}",
+            results.len()
+        );
+        // The short line "ffi::CString" should be first (highest score).
+        assert_eq!(
+            results[0].snippet, "ffi::CString",
+            "Expected the shortest/most exact match first, got: {}",
+            results[0].snippet
         );
     }
 }
