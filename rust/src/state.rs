@@ -192,7 +192,13 @@ fn add_prepared_doc(writer: &IndexWriter, schema: &Schema, doc: PreparedDoc) -> 
 /// Build the entire index from scratch.
 ///
 /// Walks the project directory, clears the existing index, and re-indexes
-/// all matching files. File reading is parallelized across all CPU cores.
+/// all matching files.
+///
+/// Pipeline: a reader thread runs rayon to read files in parallel and sends
+/// prepared docs through a bounded channel. The current thread (which holds
+/// the IndexWriter) drains the channel and writes docs concurrently, so
+/// reading and writing fully overlap instead of running in two sequential
+/// phases.
 pub fn build_index() -> Result<u64, String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -205,7 +211,6 @@ pub fn build_index() -> Result<u64, String> {
     let files = walker::walk_project(&state.project_root, &state.config);
     let total_files = files.len() as u64;
     prog.total.store(total_files, Ordering::SeqCst);
-    // Push immediately so the UI appears as soon as the file list is known.
     *indexing_event_slot().lock() = Some(IndexingEvent {
         total: total_files,
         done: 0,
@@ -216,25 +221,25 @@ pub fn build_index() -> Result<u64, String> {
     notify_main_thread();
 
     let mut writer = state.writer.lock();
-
-    // Delete all existing documents
     writer
         .delete_all_documents()
         .map_err(|e| format!("Failed to clear index: {}", e))?;
 
-    // Read and prepare all documents in parallel
+    // Bounded channel: backpressure keeps memory usage proportional to the
+    // channel capacity regardless of project size.
+    let (doc_tx, doc_rx) = std::sync::mpsc::sync_channel::<Result<PreparedDoc, String>>(512);
+
+    let project_root = state.project_root.clone();
     let done_counter = Arc::new(AtomicU64::new(0));
     let done_ref = done_counter.clone();
-    let project_root = &state.project_root;
 
-    let prepared: Vec<_> = files
-        .par_iter()
-        .filter_map(|file_path| {
-            let result = prepare_doc(project_root, file_path);
+    // Reader thread: rayon reads files in parallel and sends prepared docs to
+    // the writer through the channel. Blocks on send when the channel is full.
+    let reader = std::thread::spawn(move || {
+        files.par_iter().for_each(|file_path| {
+            let result = prepare_doc(&project_root, file_path);
             let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
             prog.done.store(count, Ordering::Relaxed);
-            // Push a progress event every 100 files. uv_async_send is thread-safe
-            // and coalesces rapid calls, so this is cheap from rayon threads.
             if count.is_multiple_of(100) {
                 let total = prog.total.load(Ordering::Relaxed);
                 *indexing_event_slot().lock() = Some(IndexingEvent {
@@ -246,20 +251,19 @@ pub fn build_index() -> Result<u64, String> {
                 });
                 notify_main_thread();
             }
-            match result {
-                Ok(doc) => Some(Ok(doc)),
-                Err(e) => {
-                    log::warn!("Failed to read {:?}: {}", file_path, e);
-                    Some(Err(e))
-                }
-            }
-        })
-        .collect();
+            let payload = result.map_err(|e| {
+                log::warn!("Failed to read {:?}: {}", file_path, e);
+                e
+            });
+            let _ = doc_tx.send(payload);
+        });
+        // doc_tx dropped here — closes the channel and unblocks the writer loop.
+    });
 
-    // Feed prepared docs to the writer sequentially (IndexWriter is not Sync)
+    // Writer (current thread): drain the channel while the reader is running.
     let mut indexed_count: u64 = 0;
     let mut error_count: u64 = 0;
-    for result in prepared {
+    for result in doc_rx {
         match result {
             Ok(doc) => match add_prepared_doc(&writer, &state.schema, doc) {
                 Ok(()) => indexed_count += 1,
@@ -271,6 +275,10 @@ pub fn build_index() -> Result<u64, String> {
             Err(_) => error_count += 1,
         }
     }
+
+    reader
+        .join()
+        .map_err(|_| "Reader thread panicked during index build".to_string())?;
 
     writer
         .commit()
@@ -398,15 +406,17 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         }
     }
 
-    // Read files in parallel
+    // Pipeline: same read-write overlap as build_index.
+    let (doc_tx, doc_rx) =
+        std::sync::mpsc::sync_channel::<(Result<PreparedDoc, String>, bool)>(512);
+
+    let project_root = state.project_root.clone();
     let done_counter = Arc::new(AtomicU64::new(0));
     let done_ref = done_counter.clone();
-    let project_root = &state.project_root;
 
-    let prepared: Vec<(Result<PreparedDoc, String>, bool)> = files_to_index
-        .par_iter()
-        .map(|(file_path, is_update)| {
-            let result = prepare_doc(project_root, file_path);
+    let reader = std::thread::spawn(move || {
+        files_to_index.par_iter().for_each(|(file_path, is_update)| {
+            let result = prepare_doc(&project_root, file_path);
             let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
             prog.done.store(count, Ordering::Relaxed);
             if count.is_multiple_of(100) {
@@ -420,14 +430,13 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
                 });
                 notify_main_thread();
             }
-            (result, *is_update)
-        })
-        .collect();
+            let _ = doc_tx.send((result, *is_update));
+        });
+    });
 
-    // Feed to writer
     let mut added: u64 = 0;
     let mut updated: u64 = 0;
-    for (result, is_update) in prepared {
+    for (result, is_update) in doc_rx {
         match result {
             Ok(doc) => match add_prepared_doc(&writer, &state.schema, doc) {
                 Ok(()) => {
@@ -442,6 +451,10 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
             Err(e) => log::warn!("Failed to read file: {}", e),
         }
     }
+
+    reader
+        .join()
+        .map_err(|_| "Reader thread panicked during index update".to_string())?;
 
     writer
         .commit()
