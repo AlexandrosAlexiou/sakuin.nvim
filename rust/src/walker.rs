@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use ignore::WalkBuilder;
+use parking_lot::Mutex;
 
 use crate::types::SakuinConfig;
 
@@ -79,12 +79,12 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
                 return ignore::WalkState::Continue;
             }
 
-            files.lock().unwrap().push(path);
+            files.lock().push(path);
             ignore::WalkState::Continue
         })
     });
 
-    files.into_inner().unwrap()
+    files.into_inner()
 }
 
 /// Return a sensible number of CPUs for parallel work.
@@ -94,16 +94,52 @@ fn num_cpus() -> usize {
         .unwrap_or(4)
 }
 
+/// Extensions that are always binary — skip without reading file content.
+static BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "svg",
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "zip", "gz", "tar", "bz2", "xz", "zst", "7z", "rar",
+    "exe", "dll", "so", "dylib", "a", "lib", "wasm",
+    "mp3", "mp4", "wav", "ogg", "flac", "avi", "mkv", "mov",
+    "ttf", "otf", "woff", "woff2", "eot",
+    "db", "sqlite", "sqlite3",
+    "bin", "dat", "class", "pyc", "pyo",
+];
+
+/// Extensions that are always text — skip the 8 KB sniff.
+static TEXT_EXTENSIONS: &[&str] = &[
+    "rs", "py", "js", "ts", "jsx", "tsx", "go", "c", "cpp", "cc", "cxx", "h", "hpp",
+    "java", "kt", "swift", "cs", "rb", "php", "lua", "vim", "el", "clj", "cljs",
+    "hs", "ml", "mli", "ex", "exs", "erl", "scala", "dart", "zig", "nim", "cr",
+    "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+    "md", "txt", "rst", "adoc", "org",
+    "toml", "yaml", "yml", "json", "xml", "html", "htm", "css", "scss", "sass", "less",
+    "ini", "cfg", "conf", "env", "properties",
+    "sql", "graphql", "proto", "thrift",
+    "tf", "hcl", "nix", "cmake", "make", "mk",
+    "lock", "sum", "mod",
+];
+
 /// Heuristic binary file detection.
 ///
-/// Reads up to 8 KB and counts null bytes. A file is considered binary if
-/// more than 0.3 % of the sampled bytes are null. A single null in a UTF-8
-/// text file (e.g. a BOM-less file with a lone embedded zero) used to cause
-/// the old single-byte check to drop the file entirely.
+/// First checks the file extension against known binary/text lists to avoid
+/// I/O entirely for the common case. Falls back to reading up to 8 KB and
+/// counting null bytes for unknown extensions.
 fn is_likely_binary(path: &Path) -> bool {
     use std::fs::File;
     use std::io::Read;
 
+    if let Some(ext) = path.extension() {
+        let ext = ext.to_string_lossy().to_lowercase();
+        if BINARY_EXTENSIONS.contains(&ext.as_str()) {
+            return true;
+        }
+        if TEXT_EXTENSIONS.contains(&ext.as_str()) {
+            return false;
+        }
+    }
+
+    // Unknown extension — sniff the first 8 KB for null bytes.
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return true,

@@ -435,20 +435,20 @@ fn find_matching_lines(
         return Vec::new();
     }
 
+    // Lowercase the whole file once instead of allocating a new String per line.
+    let contents_lower = contents.to_lowercase();
     let mut matches = Vec::new();
 
-    for (line_idx, line) in contents.lines().enumerate() {
+    for (line_idx, (line, line_lower)) in contents.lines().zip(contents_lower.lines()).enumerate() {
         if line_idx & 0x1FF == 0 && cancelled.load(Ordering::Relaxed) {
             return matches;
         }
-
-        let line_lower = line.to_lowercase();
 
         // A line matches if ANY term appears on it.
         // Find the earliest matching column across all terms.
         let best_col = terms
             .iter()
-            .filter_map(|t| term_find_in_str(t, &line_lower))
+            .filter_map(|t| term_find_in_str(t, line_lower))
             .min();
 
         if let Some(col) = best_col {
