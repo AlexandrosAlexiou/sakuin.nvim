@@ -2,7 +2,10 @@ use clap::{Parser, Subcommand};
 use sakuin::internal::{build_index, do_search, init, shutdown, stats, update_index};
 
 #[derive(Parser)]
-#[command(name = "sakuin-cli", about = "sakuin debug CLI — build, update, search, stats")]
+#[command(
+    name = "sakuin-cli",
+    about = "sakuin debug CLI — build, update, search, stats"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -60,7 +63,10 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Build { root, index_dir: idx } => {
+        Command::Build {
+            root,
+            index_dir: idx,
+        } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             match build_index() {
@@ -70,7 +76,10 @@ fn main() {
             shutdown();
         }
 
-        Command::Update { root, index_dir: idx } => {
+        Command::Update {
+            root,
+            index_dir: idx,
+        } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             match update_index() {
@@ -82,7 +91,12 @@ fn main() {
             shutdown();
         }
 
-        Command::Search { root, query, index_dir: idx, limit } => {
+        Command::Search {
+            root,
+            query,
+            index_dir: idx,
+            limit,
+        } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             let t = std::time::Instant::now();
@@ -106,7 +120,10 @@ fn main() {
             shutdown();
         }
 
-        Command::Stats { root, index_dir: idx } => {
+        Command::Stats {
+            root,
+            index_dir: idx,
+        } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             match stats() {
