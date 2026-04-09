@@ -20,11 +20,12 @@ case "$(uname -s)" in
 esac
 
 # Build release
-cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release
+cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --bin sakuin-cli
 
 # Copy to build/
 mkdir -p "$BUILD_DIR"
 cp "$RUST_DIR/target/release/$LIB_NAME" "$BUILD_DIR/"
+cp "$RUST_DIR/target/release/sakuin-cli" "$BUILD_DIR/"
 
 # On macOS, ad-hoc re-sign so the kernel accepts the new binary.
 # Without this, replacing a previously-loaded dylib triggers a code-signing
@@ -35,3 +36,5 @@ fi
 
 echo "Built $BUILD_DIR/$LIB_NAME"
 ls -lh "$BUILD_DIR/$LIB_NAME"
+echo "Built $BUILD_DIR/sakuin-cli"
+ls -lh "$BUILD_DIR/sakuin-cli"
