@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, Occur, RegexQuery};
+use tantivy::query::{AllQuery, BooleanQuery, Occur, RegexQuery};
 use tantivy::schema::{Field, Schema, Value};
 use tantivy::{IndexReader, TantivyDocument};
 
@@ -190,12 +190,26 @@ where
     // Build Tantivy query for candidate document retrieval.
     // Terms are split into alphanumeric chunks to match how Tantivy's
     // tokenizer indexes text (punctuation is stripped during indexing).
+    // Terms that are purely punctuation (e.g. "::") have no alphanumeric
+    // chunks and cannot be queried via the index — skip them here and let
+    // line-level literal matching handle them.
     let term_queries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = terms
         .iter()
-        .map(|t| build_query_for_term(t, &default_fields).map(|q| (Occur::Must, q)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|t| {
+            build_query_for_term(t, &default_fields)
+                .ok()
+                .map(|q| (Occur::Must, q))
+        })
+        .collect();
 
-    let query: Box<dyn tantivy::query::Query> = Box::new(BooleanQuery::new(term_queries));
+    // If no terms produced an index query (all were pure punctuation),
+    // fall back to matching every document so that line-level matching
+    // can still find them.
+    let query: Box<dyn tantivy::query::Query> = if term_queries.is_empty() {
+        Box::new(AllQuery)
+    } else {
+        Box::new(BooleanQuery::new(term_queries))
+    };
 
     let searcher = params.reader.searcher();
 
@@ -738,6 +752,32 @@ mod tests {
             results.is_empty(),
             "Expected no results for a file deleted from disk, got: {:?}",
             results.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_pure_punctuation_query() {
+        // Searching "::" should not error and should match lines containing "::".
+        let (reader, schema, dir) = setup_test_index(&[
+            ("main.rs", "use std::collections::HashMap;\nlet x = 42;\n"),
+            ("lib.rs", "fn helper() {}\n"),
+        ]);
+
+        let results = do_search(&reader, &schema, dir.path(), "::");
+        assert!(
+            !results.is_empty(),
+            "Expected '::' to match line containing '::'"
+        );
+        assert_eq!(results[0].path, "main.rs");
+        assert!(
+            results[0].snippet.contains("::"),
+            "Expected snippet to contain '::', got: {}",
+            results[0].snippet
+        );
+        // lib.rs should not appear
+        assert!(
+            results.iter().all(|r| r.path == "main.rs"),
+            "Expected only main.rs in results"
         );
     }
 }
