@@ -204,7 +204,7 @@ where
         Vec::new()
     } else {
         searcher
-            .search(&query, &TopDocs::with_limit(num_docs))
+            .search(&query, &TopDocs::with_limit(num_docs).order_by_score())
             .map_err(|e| format!("Search failed: {}", e))?
     };
 
