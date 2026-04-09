@@ -236,6 +236,12 @@ where
             let matches = find_matching_lines(abs_path, &search_terms, params.cancelled);
 
             if matches.is_empty() {
+                // The file may have been deleted from disk but not yet
+                // removed from the index. Skip it to avoid ghost results.
+                if !abs_path.exists() {
+                    return vec![];
+                }
+
                 // No content-line matches — check if path matches any term.
                 let path_lower = rel_path.to_lowercase();
                 let path_match = search_terms.iter().any(|t| path_lower.contains(t.as_str()));
@@ -710,6 +716,28 @@ mod tests {
             results[0].snippet, "ffi::CString",
             "Expected the shortest/most exact match first, got: {}",
             results[0].snippet
+        );
+    }
+
+    #[test]
+    fn test_deleted_file_not_in_results() {
+        // A file that has been deleted from disk but is still in the index
+        // should not appear in search results.
+        let (reader, schema, dir) = setup_test_index(&[
+            ("src/config.rs", "let production = true;\n"),
+            ("src/utils.rs", "fn helper() {}\n"),
+        ]);
+
+        // Delete the file from disk, leaving its document in the index.
+        std::fs::remove_file(dir.path().join("src/config.rs")).unwrap();
+
+        // The query matches the path ("config") so without the fix
+        // this would return a ghost result via the path-only fallback.
+        let results = do_search(&reader, &schema, dir.path(), "config");
+        assert!(
+            results.is_empty(),
+            "Expected no results for a file deleted from disk, got: {:?}",
+            results.iter().map(|r| &r.path).collect::<Vec<_>>()
         );
     }
 }
