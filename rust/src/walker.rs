@@ -53,14 +53,15 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
                 return ignore::WalkState::Continue;
             }
 
-            let path = entry.path().to_path_buf();
-
-            // Check file size
-            if let Ok(metadata) = std::fs::metadata(&path) {
+            // Use the metadata the ignore crate already fetched from the directory
+            // scan — avoids an extra stat(2) syscall per file.
+            if let Ok(metadata) = entry.metadata() {
                 if metadata.len() > max_file_size {
                     return ignore::WalkState::Continue;
                 }
             }
+
+            let path = entry.path().to_path_buf();
 
             // Check extension filter
             if let Some(ref exts) = include_extensions {
