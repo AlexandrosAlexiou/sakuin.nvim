@@ -39,35 +39,32 @@ fn wait_for_notification(timeout: std::time::Duration) -> bool {
     *notified
 }
 
+fn fixtures_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+fn copy_fixture_dir(src: &std::path::Path, dst: &std::path::Path) {
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            fs::create_dir_all(&dst_path).unwrap();
+            copy_fixture_dir(&entry.path(), &dst_path);
+        } else {
+            fs::copy(entry.path(), dst_path).unwrap();
+        }
+    }
+}
+
 /// Test helper: create a temporary project with some files.
 fn create_test_project() -> TempDir {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
-    // Create some text files
-    fs::write(
-        root.join("hello.rs"),
-        "fn main() {\n    println!(\"hello world\");\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("lib.rs"),
-        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("README.md"),
-        "# Test Project\nThis is a test project for sakuin.\n",
-    )
-    .unwrap();
-
-    // Create a subdirectory with files
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/utils.rs"),
-        "pub fn greet(name: &str) -> String {\n    format!(\"Hello, {}!\", name)\n}\n",
-    )
-    .unwrap();
+    let fixture = fixtures_dir().join("test_project");
+    copy_fixture_dir(&fixture, root);
 
     // Create a file that should be skipped (binary)
     fs::write(root.join("binary.bin"), [0u8, 1, 2, 3, 0, 255, 128]).unwrap();
@@ -80,124 +77,8 @@ fn create_code_project() -> TempDir {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
-    fs::create_dir_all(root.join("src")).unwrap();
-
-    // File with snake_case identifiers
-    fs::write(
-        root.join("src/pool.rs"),
-        concat!(
-            "use std::sync::Arc;\n",
-            "\n",
-            "pub struct ThreadPool {\n",
-            "    thread_pool_size: usize,\n",
-            "    max_queue_length: usize,\n",
-            "}\n",
-            "\n",
-            "impl ThreadPool {\n",
-            "    pub fn new(thread_pool_size: usize) -> Self {\n",
-            "        Self { thread_pool_size, max_queue_length: 1024 }\n",
-            "    }\n",
-            "}\n",
-        ),
-    )
-    .unwrap();
-
-    // File with generic types and angle brackets
-    fs::write(
-        root.join("src/math.rs"),
-        concat!(
-            "pub struct Vec3<T> {\n",
-            "    pub x: T,\n",
-            "    pub y: T,\n",
-            "    pub z: T,\n",
-            "}\n",
-            "\n",
-            "impl<T: std::ops::Add<Output = T>> Vec3<T> {\n",
-            "    pub fn add(self, other: Vec3<T>) -> Vec3<T> {\n",
-            "        Vec3 { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }\n",
-            "    }\n",
-            "}\n",
-            "\n",
-            "pub type Vec3f = Vec3<f32>;\n",
-            "pub type HashMap<K, V> = std::collections::HashMap<K, V>;\n",
-        ),
-    )
-    .unwrap();
-
-    // File with C++ style double colons and templates
-    fs::write(
-        root.join("src/legacy.cpp"),
-        concat!(
-            "#include <vector>\n",
-            "#include <string>\n",
-            "#include <unordered_map>\n",
-            "\n",
-            "int main() {\n",
-            "    std::vector<int> numbers;\n",
-            "    std::string name = \"test\";\n",
-            "    std::unordered_map<std::string, int> lookup;\n",
-            "    return 0;\n",
-            "}\n",
-        ),
-    )
-    .unwrap();
-
-    // File with SCREAMING_SNAKE_CASE constants
-    fs::write(
-        root.join("src/config.rs"),
-        concat!(
-            "pub const MAX_FILE_SIZE: usize = 1_048_576;\n",
-            "pub const DEFAULT_TIMEOUT_MS: u64 = 5000;\n",
-            "pub const MIN_POOL_SIZE: usize = 2;\n",
-            "pub const MAX_RETRY_COUNT: u32 = 3;\n",
-        ),
-    )
-    .unwrap();
-
-    // File with camelCase and PascalCase
-    fs::write(
-        root.join("src/handler.rs"),
-        concat!(
-            "pub struct HttpRequestHandler {\n",
-            "    baseUrl: String,\n",
-            "    maxRetries: u32,\n",
-            "}\n",
-            "\n",
-            "impl HttpRequestHandler {\n",
-            "    pub fn handleRequest(&self) -> Result<(), Error> {\n",
-            "        todo!()\n",
-            "    }\n",
-            "\n",
-            "    pub fn getBaseUrl(&self) -> &str {\n",
-            "        &self.baseUrl\n",
-            "    }\n",
-            "}\n",
-        ),
-    )
-    .unwrap();
-
-    // File with mixed identifiers, parentheses, and special chars
-    fs::write(
-        root.join("src/parser.rs"),
-        concat!(
-            "pub fn parse_token(input: &str) -> Option<(Token, &str)> {\n",
-            "    if input.starts_with('(') {\n",
-            "        Some((Token::LParen, &input[1..]))\n",
-            "    } else if input.starts_with(')') {\n",
-            "        Some((Token::RParen, &input[1..]))\n",
-            "    } else {\n",
-            "        None\n",
-            "    }\n",
-            "}\n",
-            "\n",
-            "pub enum Token {\n",
-            "    LParen,\n",
-            "    RParen,\n",
-            "    Ident(String),\n",
-            "}\n",
-        ),
-    )
-    .unwrap();
+    let fixture = fixtures_dir().join("code_project");
+    copy_fixture_dir(&fixture, root);
 
     dir
 }
