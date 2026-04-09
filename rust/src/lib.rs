@@ -428,3 +428,11 @@ mod ffi_exports {
 
 // Re-export FFI functions at crate root for integration tests.
 pub use ffi_exports::*;
+
+/// Internal API for the debug CLI binary.
+/// Not part of the C FFI surface exposed to Neovim.
+#[doc(hidden)]
+pub mod internal {
+    pub use crate::state::{build_index, do_search, init, shutdown, stats, update_index};
+    pub use crate::types::{IndexStats, SakuinConfig, SearchResult};
+}

@@ -9,7 +9,12 @@ license = "MIT"
 name = "sakuin"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "sakuin-cli"
+path = "cli/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 tantivy = "0.22"
 rayon = "1.10"
 notify = { version = "7", features = ["macos_fsevent"] }
