@@ -168,7 +168,7 @@ function M.load()
 		error(
 			"[sakuin] Native library not found at: "
 				.. lib_path
-				.. "\nRun :SakuinBuild or install via your plugin manager's build hook."
+				.. "\nRun the build script (scripts/build.sh) or install a prebuilt binary from GitHub Releases."
 		)
 	end
 

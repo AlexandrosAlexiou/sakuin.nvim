@@ -27,7 +27,7 @@ via a [snacks.nvim](https://github.com/folke/snacks.nvim) picker.
 ```lua
 {
   "alexiou/sakuin.nvim",
-  build = "SakuinBuild",
+  build = function() require("sakuin.install").ensure_binary() end,
   dependencies = { "folke/snacks.nvim" },
   opts = {},
 }

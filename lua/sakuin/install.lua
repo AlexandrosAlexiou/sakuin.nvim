@@ -141,8 +141,8 @@ function M.ensure_binary(opts)
 		"[sakuin] Failed to obtain native library.\n"
 			.. "  Download error: %s\n"
 			.. "  Build error: %s\n"
-			.. "  Install Rust (https://rustup.rs) and run :SakuinBuild, "
-			.. "or download a binary from GitHub Releases.",
+		.. "  Install Rust (https://rustup.rs) and run scripts/build.sh, "
+		.. "or download a binary from GitHub Releases.",
 		dl_err or "unknown",
 		build_err or "unknown"
 	)
