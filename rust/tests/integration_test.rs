@@ -825,7 +825,10 @@ fn test_init_with_config_json() {
     assert_eq!(rc, 0);
 
     let results = sync_search("hello");
-    assert!(!results.is_empty(), "Expected results after init with custom config");
+    assert!(
+        !results.is_empty(),
+        "Expected results after init with custom config"
+    );
 
     sakuin::sakuin_shutdown();
 }
@@ -845,7 +848,10 @@ fn test_init_with_invalid_config_json() {
     assert_eq!(rc, -1, "sakuin_init with invalid config JSON should fail");
 
     let err_ptr = sakuin::sakuin_last_error();
-    assert!(!err_ptr.is_null(), "last_error should be set after failed init");
+    assert!(
+        !err_ptr.is_null(),
+        "last_error should be set after failed init"
+    );
     let err = unsafe { CStr::from_ptr(err_ptr) }.to_str().unwrap();
     assert!(
         err.contains("Failed to parse config JSON"),
@@ -912,7 +918,10 @@ fn test_get_progress_after_build() {
     init_and_build(&project);
 
     let prog_ptr = sakuin::sakuin_get_progress();
-    assert!(!prog_ptr.is_null(), "sakuin_get_progress should return non-null");
+    assert!(
+        !prog_ptr.is_null(),
+        "sakuin_get_progress should return non-null"
+    );
 
     let prog_json = unsafe { CStr::from_ptr(prog_ptr) }.to_str().unwrap();
     let prog: serde_json::Value = serde_json::from_str(prog_json).unwrap();
@@ -1064,7 +1073,10 @@ fn test_watcher_double_start() {
 
     // Error should be available.
     let err_ptr = sakuin::sakuin_last_error();
-    assert!(!err_ptr.is_null(), "last_error should describe the double-start failure");
+    assert!(
+        !err_ptr.is_null(),
+        "last_error should describe the double-start failure"
+    );
     sakuin::sakuin_free_string(err_ptr);
 
     sakuin::sakuin_shutdown();
