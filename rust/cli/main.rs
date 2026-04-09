@@ -85,18 +85,20 @@ fn main() {
         Command::Search { root, query, index_dir: idx, limit } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
+            let t = std::time::Instant::now();
             match do_search(&query) {
                 Ok(mut results) => {
+                    let elapsed = t.elapsed().as_millis();
                     if limit > 0 {
                         results.truncate(limit);
                     }
                     if results.is_empty() {
-                        println!("No results for {:?}", query);
+                        println!("No results for {:?} ({elapsed}ms)", query);
                     } else {
                         for r in &results {
                             println!("{}:{}:{}  {}", r.path, r.line, r.col, r.snippet.trim());
                         }
-                        println!("({} result(s))", results.len());
+                        println!("({} result(s), {elapsed}ms)", results.len());
                     }
                 }
                 Err(e) => die(&format!("search: {e}")),
