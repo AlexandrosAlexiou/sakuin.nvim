@@ -85,6 +85,15 @@ fn create_code_project() -> TempDir {
 
 /// Test helper: init + build index on a project, returning the TempDir.
 /// Panics on failure.
+fn init_only(project: &TempDir) {
+    let root = project.path();
+    let index_dir = root.join(".sakuin");
+    let c_root = CString::new(root.to_str().unwrap()).unwrap();
+    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
+    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
+    assert_eq!(rc, 0, "sakuin_init should succeed");
+}
+
 fn init_and_build(project: &TempDir) {
     let root = project.path();
     let index_dir = root.join(".sakuin");
@@ -788,6 +797,317 @@ fn test_search_advanced_boolean_and() {
         !results.is_empty(),
         "Expected results for 'thread AND pool'"
     );
+
+    sakuin::sakuin_shutdown();
+}
+
+// ============================================================================
+// Init with custom / invalid config JSON
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_init_with_config_json() {
+    let project = create_test_project();
+    let root = project.path();
+    let index_dir = root.join(".sakuin");
+
+    let config_json = r#"{"max_file_size":524288,"ignore_patterns":[],"include_extensions":null,"respect_gitignore":false}"#;
+
+    let c_root = CString::new(root.to_str().unwrap()).unwrap();
+    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
+    let c_cfg = CString::new(config_json).unwrap();
+
+    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr());
+    assert_eq!(rc, 0, "sakuin_init with valid config JSON should succeed");
+
+    let rc = sakuin::sakuin_build_index();
+    assert_eq!(rc, 0);
+
+    let results = sync_search("hello");
+    assert!(!results.is_empty(), "Expected results after init with custom config");
+
+    sakuin::sakuin_shutdown();
+}
+
+#[test]
+#[serial]
+fn test_init_with_invalid_config_json() {
+    let project = create_test_project();
+    let root = project.path();
+    let index_dir = root.join(".sakuin");
+
+    let c_root = CString::new(root.to_str().unwrap()).unwrap();
+    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
+    let c_cfg = CString::new("{not_valid_json}").unwrap();
+
+    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr());
+    assert_eq!(rc, -1, "sakuin_init with invalid config JSON should fail");
+
+    let err_ptr = sakuin::sakuin_last_error();
+    assert!(!err_ptr.is_null(), "last_error should be set after failed init");
+    let err = unsafe { CStr::from_ptr(err_ptr) }.to_str().unwrap();
+    assert!(
+        err.contains("Failed to parse config JSON"),
+        "Unexpected error: {}",
+        err
+    );
+    sakuin::sakuin_free_string(err_ptr);
+}
+
+// ============================================================================
+// sakuin_last_error
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_last_error_after_failed_search() {
+    // Ensure state is None going in (all prior tests call sakuin_shutdown,
+    // but call it here defensively in case a previous test panicked).
+    sakuin::sakuin_shutdown();
+
+    // Clear any leftover error from a previous test run.
+    let stale = sakuin::sakuin_last_error();
+    if !stale.is_null() {
+        sakuin::sakuin_free_string(stale);
+    }
+
+    // Searching without init must return null and record the error.
+    let c_query = CString::new("hello").unwrap();
+    let result_ptr = sakuin::sakuin_search(c_query.as_ptr());
+    assert!(
+        result_ptr.is_null(),
+        "sakuin_search without init should return null"
+    );
+
+    let err_ptr = sakuin::sakuin_last_error();
+    assert!(
+        !err_ptr.is_null(),
+        "sakuin_last_error should be non-null after failed search"
+    );
+    let err = unsafe { CStr::from_ptr(err_ptr) }.to_str().unwrap();
+    assert!(
+        err.contains("not initialized"),
+        "Unexpected error message: {}",
+        err
+    );
+    sakuin::sakuin_free_string(err_ptr);
+
+    // Reading clears the slot — second call should return null.
+    let err_ptr2 = sakuin::sakuin_last_error();
+    assert!(
+        err_ptr2.is_null(),
+        "sakuin_last_error should be null after it has been read once"
+    );
+}
+
+// ============================================================================
+// sakuin_get_progress
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_get_progress_after_build() {
+    let project = create_test_project();
+    init_and_build(&project);
+
+    let prog_ptr = sakuin::sakuin_get_progress();
+    assert!(!prog_ptr.is_null(), "sakuin_get_progress should return non-null");
+
+    let prog_json = unsafe { CStr::from_ptr(prog_ptr) }.to_str().unwrap();
+    let prog: serde_json::Value = serde_json::from_str(prog_json).unwrap();
+    sakuin::sakuin_free_string(prog_ptr);
+
+    assert!(prog.get("total").is_some(), "Progress should have 'total'");
+    assert!(prog.get("done").is_some(), "Progress should have 'done'");
+    assert_eq!(
+        prog["status"].as_str().unwrap(),
+        "done",
+        "Status should be 'done' after synchronous build"
+    );
+
+    sakuin::sakuin_shutdown();
+}
+
+// ============================================================================
+// sakuin_build_index_async + sakuin_indexing_take_event
+// ============================================================================
+
+/// Poll until an indexing event with status "done" arrives, or panic on timeout.
+fn wait_for_indexing_done(timeout: std::time::Duration) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for indexing 'done' event"
+        );
+
+        wait_for_notification(std::time::Duration::from_millis(500));
+        reset_notify_state();
+
+        let event_ptr = sakuin::sakuin_indexing_take_event();
+        if event_ptr.is_null() {
+            continue;
+        }
+
+        let event_json = unsafe { CStr::from_ptr(event_ptr) }.to_str().unwrap();
+        let event: serde_json::Value = serde_json::from_str(event_json).unwrap();
+        sakuin::sakuin_free_string(event_ptr);
+
+        match event["status"].as_str().unwrap_or("") {
+            "done" => return event,
+            "error" => panic!("Async indexing error: {}", event),
+            _ => {} // progress — keep polling
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn test_async_build_index() {
+    let project = create_test_project();
+    init_only(&project);
+
+    let dummy_handle = 0xDEAD_BEEF_usize as *mut std::os::raw::c_void;
+    sakuin::sakuin_register_async_notifier(
+        dummy_handle,
+        fake_uv_async_send as unsafe extern "C" fn(*mut std::os::raw::c_void) -> i32,
+    );
+
+    reset_notify_state();
+
+    let rc = sakuin::sakuin_build_index_async();
+    assert_eq!(rc, 0, "sakuin_build_index_async should succeed");
+
+    let event = wait_for_indexing_done(std::time::Duration::from_secs(10));
+    assert!(
+        event["done"].as_u64().unwrap() >= 3,
+        "Expected at least 3 files indexed in done event, got: {}",
+        event
+    );
+
+    // Index should be usable after async build.
+    let results = sync_search("hello");
+    assert!(!results.is_empty(), "Should find results after async build");
+
+    sakuin::sakuin_shutdown();
+}
+
+#[test]
+#[serial]
+fn test_async_update_index() {
+    let project = create_test_project();
+    let root = project.path();
+    init_and_build(&project);
+
+    let dummy_handle = 0xDEAD_BEEF_usize as *mut std::os::raw::c_void;
+    sakuin::sakuin_register_async_notifier(
+        dummy_handle,
+        fake_uv_async_send as unsafe extern "C" fn(*mut std::os::raw::c_void) -> i32,
+    );
+
+    // Add a file so the incremental update has real work to do.
+    fs::write(
+        root.join("async_update_marker.txt"),
+        "unique async update content xyzzy",
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    reset_notify_state();
+
+    let rc = sakuin::sakuin_update_index_async();
+    assert_eq!(rc, 0, "sakuin_update_index_async should succeed");
+
+    let event = wait_for_indexing_done(std::time::Duration::from_secs(10));
+    assert_eq!(event["status"].as_str().unwrap(), "done");
+
+    // The new file should now be searchable.
+    let results = sync_search("xyzzy");
+    assert!(
+        !results.is_empty(),
+        "Should find newly added file after async update"
+    );
+
+    sakuin::sakuin_shutdown();
+}
+
+// ============================================================================
+// sakuin_start_watcher / sakuin_stop_watcher
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_start_stop_watcher() {
+    let project = create_test_project();
+    init_and_build(&project);
+
+    let rc = sakuin::sakuin_start_watcher();
+    assert_eq!(rc, 0, "sakuin_start_watcher should succeed");
+
+    sakuin::sakuin_stop_watcher(); // should not crash
+
+    sakuin::sakuin_shutdown();
+}
+
+#[test]
+#[serial]
+fn test_watcher_double_start() {
+    let project = create_test_project();
+    init_and_build(&project);
+
+    let rc = sakuin::sakuin_start_watcher();
+    assert_eq!(rc, 0, "first sakuin_start_watcher should succeed");
+
+    let rc = sakuin::sakuin_start_watcher();
+    assert_eq!(rc, -1, "second sakuin_start_watcher should fail with -1");
+
+    // Error should be available.
+    let err_ptr = sakuin::sakuin_last_error();
+    assert!(!err_ptr.is_null(), "last_error should describe the double-start failure");
+    sakuin::sakuin_free_string(err_ptr);
+
+    sakuin::sakuin_shutdown();
+}
+
+// ============================================================================
+// sakuin_search_cancel
+// ============================================================================
+
+#[test]
+#[serial]
+fn test_search_cancel() {
+    let project = create_code_project();
+    init_and_build(&project);
+
+    let dummy_handle = 0xDEAD_BEEF_usize as *mut std::os::raw::c_void;
+    sakuin::sakuin_register_async_notifier(
+        dummy_handle,
+        fake_uv_async_send as unsafe extern "C" fn(*mut std::os::raw::c_void) -> i32,
+    );
+
+    reset_notify_state();
+
+    // Submit and immediately cancel.
+    let query = CString::new("ThreadPool").unwrap();
+    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 99, 500, 0);
+    assert_eq!(rc, 0);
+    sakuin::sakuin_search_cancel();
+
+    // Give the worker time to process the cancellation.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Draining the queue after cancel must not crash or produce invalid JSON.
+    loop {
+        let ptr = sakuin::sakuin_search_take_result();
+        if ptr.is_null() {
+            break;
+        }
+        let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
+        let _msg: serde_json::Value =
+            serde_json::from_str(json).expect("Result message should be valid JSON");
+        sakuin::sakuin_free_string(ptr);
+    }
 
     sakuin::sakuin_shutdown();
 }
