@@ -104,13 +104,6 @@ fn split_alphanumeric(s: &str) -> Vec<String> {
         chunks.push(current);
     }
 
-    // Deduplicate while preserving order
-    let mut seen = std::collections::HashSet::new();
-    chunks.retain(|c| {
-        let key = c.to_lowercase();
-        seen.insert(key)
-    });
-
     chunks
 }
 
@@ -360,20 +353,14 @@ fn find_matching_lines(
 
 /// Extract literal search terms from the query string.
 ///
-/// Splits on whitespace and strips surrounding quote/paren characters.
-/// Each term is preserved as-is (including underscores, colons, angle
-/// brackets, etc.) — no sub-word decomposition.
+/// Splits on whitespace. Each term is preserved as-is (including
+/// underscores, colons, angle brackets, etc.).
 fn extract_literal_terms(query_str: &str) -> Vec<String> {
-    let mut terms = Vec::new();
-
-    for token in query_str.split_whitespace() {
-        let term = token.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
-        if !term.is_empty() {
-            terms.push(term.to_string());
-        }
-    }
-
-    terms
+    query_str
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -456,7 +443,6 @@ mod tests {
 
     #[test]
     fn test_extract_terms_and_is_literal() {
-        // "AND" is no longer a special operator — treated as a plain term
         assert_eq!(
             extract_literal_terms("foo AND bar"),
             vec!["foo", "AND", "bar"]
@@ -465,7 +451,6 @@ mod tests {
 
     #[test]
     fn test_extract_terms_field_prefix_is_literal() {
-        // "body:hello" is no longer stripped — treated as one literal term
         assert_eq!(extract_literal_terms("body:hello"), vec!["body:hello"]);
     }
 
@@ -486,7 +471,6 @@ mod tests {
 
     #[test]
     fn test_extract_terms_camel_case_preserved() {
-        // threadPool stays as one term — no decomposition
         assert_eq!(extract_literal_terms("threadPool"), vec!["threadPool"]);
     }
 
