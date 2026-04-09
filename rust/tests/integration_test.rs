@@ -133,10 +133,6 @@ fn result_paths(results: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-// ============================================================================
-// Original tests (now with #[serial])
-// ============================================================================
-
 #[test]
 #[serial]
 fn test_init_and_shutdown() {
@@ -762,40 +758,6 @@ fn test_incremental_file_addition() {
     assert!(
         !results.is_empty(),
         "Should find newly added file containing 'connect_to_remote_server'"
-    );
-
-    sakuin::sakuin_shutdown();
-}
-
-// ============================================================================
-// Advanced query syntax (should still work)
-// ============================================================================
-
-#[test]
-#[serial]
-fn test_search_advanced_field_prefix() {
-    let project = create_code_project();
-    init_and_build(&project);
-
-    // "body:Vec3" uses advanced syntax (field prefix with known field name)
-    let results = sync_search("body:Vec3");
-    // Should find math.rs (Vec3 is in the body)
-    assert!(!results.is_empty(), "Expected results for 'body:Vec3'");
-
-    sakuin::sakuin_shutdown();
-}
-
-#[test]
-#[serial]
-fn test_search_advanced_boolean_and() {
-    let project = create_code_project();
-    init_and_build(&project);
-
-    // Boolean AND should work as advanced query
-    let results = sync_search("thread AND pool");
-    assert!(
-        !results.is_empty(),
-        "Expected results for 'thread AND pool'"
     );
 
     sakuin::sakuin_shutdown();

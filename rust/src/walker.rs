@@ -13,7 +13,6 @@ use crate::types::SakuinConfig;
 pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(project_root);
 
-    // Respect .gitignore and .ignore (can be disabled via config)
     let use_git = config.respect_gitignore;
     builder
         .hidden(true) // always skip hidden files/dirs (e.g. .git/)
@@ -48,7 +47,6 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
                 Err(_) => return ignore::WalkState::Continue,
             };
 
-            // Skip directories
             if entry.file_type().is_none_or(|ft| !ft.is_file()) {
                 return ignore::WalkState::Continue;
             }
@@ -63,7 +61,6 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
 
             let path = entry.path().to_path_buf();
 
-            // Check extension filter
             if let Some(ref exts) = include_extensions {
                 let file_ext = path
                     .extension()
@@ -74,8 +71,6 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
                 }
             }
 
-            // Skip binary files: quick heuristic — try to read first 512 bytes
-            // and check for null bytes
             if is_likely_binary(&path) {
                 return ignore::WalkState::Continue;
             }

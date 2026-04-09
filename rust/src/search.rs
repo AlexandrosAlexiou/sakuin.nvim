@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery};
+use tantivy::query::{BooleanQuery, Occur, RegexQuery};
 use tantivy::schema::{Field, Schema, Value};
 use tantivy::{IndexReader, TantivyDocument};
 
@@ -21,46 +21,6 @@ pub struct SearchParams<'a> {
     pub cancelled: &'a Arc<AtomicBool>,
 }
 
-/// Known Tantivy field names used in this schema.
-const KNOWN_FIELDS: &[&str] = &["body", "path", "path_exact", "filename", "extension"];
-
-/// Check whether the query uses advanced Tantivy syntax that should be handled
-/// by the built-in `QueryParser` rather than our literal matching.
-fn is_advanced_query(query_str: &str) -> bool {
-    let trimmed = query_str.trim();
-
-    // Phrase query: contains double-quote
-    if trimmed.contains('"') {
-        return true;
-    }
-
-    for token in trimmed.split_whitespace() {
-        let upper = token.to_uppercase();
-        // Boolean operators — must be standalone tokens
-        if matches!(upper.as_str(), "AND" | "OR" | "NOT") {
-            return true;
-        }
-        // Leading +/- operators (Tantivy boost/exclude)
-        if (token.starts_with('+') || token.starts_with('-'))
-            && token.len() > 1
-            && token[1..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_alphanumeric())
-        {
-            return true;
-        }
-        // Field prefix — only if the part before the colon is a known field
-        if let Some(idx) = token.find(':') {
-            let prefix = &token[..idx];
-            if KNOWN_FIELDS.iter().any(|&f| prefix.eq_ignore_ascii_case(f)) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
 
 /// Build a substring-match query for a single literal chunk across multiple fields.
 ///
@@ -111,7 +71,6 @@ fn build_query_for_term(
     }
 
     if chunks.len() == 1 {
-        // Single chunk — just a direct substring query
         return build_substring_query_for_chunk(&chunks[0], fields);
     }
 
@@ -227,32 +186,17 @@ where
     let filename_field = params.schema.get_field(FIELD_FILENAME).unwrap();
     let default_fields = [body_field, path_field, filename_field];
 
-    let query: Box<dyn tantivy::query::Query> = if is_advanced_query(params.query_str) {
-        let query_parser = QueryParser::for_index(
-            params.reader.searcher().index(),
-            vec![body_field, path_field, filename_field],
-        );
-        query_parser
-            .parse_query(params.query_str)
-            .map_err(|e| format!("Failed to parse query '{}': {}", params.query_str, e))?
-    } else {
-        // Simple query: each whitespace-separated term is matched as a literal
-        // substring against indexed tokens. No sub-word decomposition.
-        //
-        // For a query like "threadPool", we search for the regex .*threadpool.*
-        // against the body, path, and filename fields. All terms must match (AND).
-        let terms = extract_literal_terms(params.query_str);
-        if terms.is_empty() {
-            return Ok(());
-        }
+    let terms = extract_literal_terms(params.query_str);
+    if terms.is_empty() {
+        return Ok(());
+    }
 
-        let term_queries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = terms
-            .iter()
-            .map(|t| build_query_for_term(t, &default_fields).map(|q| (Occur::Must, q)))
-            .collect::<Result<Vec<_>, _>>()?;
+    let term_queries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = terms
+        .iter()
+        .map(|t| build_query_for_term(t, &default_fields).map(|q| (Occur::Must, q)))
+        .collect::<Result<Vec<_>, _>>()?;
 
-        Box::new(BooleanQuery::new(term_queries))
-    };
+    let query: Box<dyn tantivy::query::Query> = Box::new(BooleanQuery::new(term_queries));
 
     let searcher = params.reader.searcher();
 
@@ -297,7 +241,6 @@ where
             .collect(),
     );
 
-    // Collect (score, rel_path, abs_path) for all matching documents.
     let doc_infos: Vec<(f32, String, std::path::PathBuf)> = top_docs
         .into_iter()
         .filter_map(|(score, doc_address)| {
@@ -310,7 +253,6 @@ where
 
     let total_emitted = Arc::new(AtomicUsize::new(0));
 
-    // Parallelize: read each file and scan for lines containing the search terms.
     let mut results: Vec<SearchResult> = doc_infos
         .par_iter()
         .flat_map_iter(|(score, rel_path, abs_path)| {
@@ -358,14 +300,12 @@ where
         })
         .collect();
 
-    // Sort by score descending.
     results.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Deliver results in batches.
     let mut emitted = 0;
     for chunk in results.chunks(batch_size) {
         if params.cancelled.load(Ordering::Relaxed) {
@@ -462,34 +402,14 @@ fn find_matching_lines(
 
 /// Extract literal search terms from the query string.
 ///
-/// Splits on whitespace, strips field prefixes for known fields, strips
-/// quote characters and boolean operators. Each term is preserved as-is
-/// (including underscores, colons, angle brackets, etc.) — no sub-word
-/// decomposition.
+/// Splits on whitespace and strips surrounding quote/paren characters.
+/// Each term is preserved as-is (including underscores, colons, angle
+/// brackets, etc.) — no sub-word decomposition.
 fn extract_literal_terms(query_str: &str) -> Vec<String> {
     let mut terms = Vec::new();
 
     for token in query_str.split_whitespace() {
-        let token = token.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
-
-        // Skip boolean operators
-        if matches!(token.to_uppercase().as_str(), "AND" | "OR" | "NOT") {
-            continue;
-        }
-
-        // Strip known field prefix (e.g., "body:term" -> "term")
-        let term = if let Some(idx) = token.find(':') {
-            let prefix = &token[..idx];
-            if KNOWN_FIELDS.iter().any(|&f| prefix.eq_ignore_ascii_case(f)) {
-                &token[idx + 1..]
-            } else {
-                token
-            }
-        } else {
-            token
-        };
-
-        let term = term.trim_matches(|c: char| c == '"' || c == '\'');
+        let term = token.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
         if !term.is_empty() {
             terms.push(term.to_string());
         }
@@ -545,55 +465,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // is_advanced_query
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_is_advanced_simple() {
-        assert!(!is_advanced_query("prod"));
-        assert!(!is_advanced_query("foo bar"));
-        assert!(!is_advanced_query("  hello world  "));
-    }
-
-    #[test]
-    fn test_is_advanced_operators() {
-        assert!(is_advanced_query("foo AND bar"));
-        assert!(is_advanced_query("foo OR bar"));
-        assert!(is_advanced_query("NOT foo"));
-    }
-
-    #[test]
-    fn test_is_advanced_field_prefix() {
-        assert!(is_advanced_query("body:foo"));
-        assert!(is_advanced_query("path:bar"));
-    }
-
-    #[test]
-    fn test_is_advanced_phrase() {
-        assert!(is_advanced_query("\"hello world\""));
-    }
-
-    #[test]
-    fn test_is_advanced_parens() {
-        assert!(!is_advanced_query("(foo)"));
-    }
-
-    #[test]
-    fn test_is_advanced_code_symbols_not_advanced() {
-        assert!(!is_advanced_query("Vec3<>"));
-        assert!(!is_advanced_query("std::vector"));
-        assert!(!is_advanced_query("thread_pool"));
-        assert!(!is_advanced_query("foo()"));
-        assert!(!is_advanced_query("HashMap<String>"));
-    }
-
-    #[test]
-    fn test_is_advanced_plus_minus() {
-        assert!(is_advanced_query("+foo"));
-        assert!(is_advanced_query("-bar"));
-    }
-
-    // ------------------------------------------------------------------
     // regex_escape
     // ------------------------------------------------------------------
 
@@ -626,13 +497,18 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_terms_strips_operators() {
-        assert_eq!(extract_literal_terms("foo AND bar"), vec!["foo", "bar"]);
+    fn test_extract_terms_and_is_literal() {
+        // "AND" is no longer a special operator — treated as a plain term
+        assert_eq!(
+            extract_literal_terms("foo AND bar"),
+            vec!["foo", "AND", "bar"]
+        );
     }
 
     #[test]
-    fn test_extract_terms_strips_field_prefix() {
-        assert_eq!(extract_literal_terms("body:hello"), vec!["hello"]);
+    fn test_extract_terms_field_prefix_is_literal() {
+        // "body:hello" is no longer stripped — treated as one literal term
+        assert_eq!(extract_literal_terms("body:hello"), vec!["body:hello"]);
     }
 
     #[test]

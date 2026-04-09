@@ -22,7 +22,6 @@ pub const FIELD_SIZE: &str = "size";
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
 
-    // Relative file path — stored and indexed with the code tokenizer
     let code_field_indexing = TextFieldIndexing::default()
         .set_tokenizer(CODE_TOKENIZER_NAME)
         .set_index_option(IndexRecordOption::WithFreqsAndPositions);
@@ -35,10 +34,8 @@ pub fn build_schema() -> Schema {
     // mtime lookups. STRING = exact match, STORED so we can read it back.
     builder.add_text_field(FIELD_PATH_EXACT, STRING | STORED);
 
-    // Filename only — for filename-centric searches (code tokenizer)
     builder.add_text_field(FIELD_FILENAME, code_text_options);
 
-    // File extension — for filtering (exact match via STRING)
     builder.add_text_field(FIELD_EXTENSION, STRING | STORED);
 
     // Full file body — tokenized with the built-in "simple" tokenizer (splits on
@@ -57,7 +54,6 @@ pub fn build_schema() -> Schema {
     // Last modified time (unix timestamp) — for staleness detection
     builder.add_u64_field(FIELD_MODIFIED, STORED | FAST);
 
-    // File size in bytes
     builder.add_u64_field(FIELD_SIZE, STORED | FAST);
 
     builder.build()
@@ -78,7 +74,6 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index_path = index_dir.join("index");
     let version_marker = index_dir.join("schema.ver");
 
-    // Wipe the index if the schema version doesn't match.
     if index_path.exists() {
         let stored = fs::read_to_string(&version_marker).unwrap_or_default();
         if stored.trim() != SCHEMA_VERSION {
@@ -110,7 +105,6 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index = Index::open_or_create(dir, schema)
         .map_err(|e| format!("Failed to open or create index: {}", e))?;
 
-    // Register the custom code tokenizer used by path and filename fields.
     let code_analyzer = TextAnalyzer::builder(CodeTokenizer::new())
         .filter(RemoveLongFilter::limit(100))
         .filter(LowerCaser)
@@ -119,7 +113,6 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
         .tokenizers()
         .register(CODE_TOKENIZER_NAME, code_analyzer);
 
-    // Write the version marker so future opens know the schema is current.
     fs::write(&version_marker, SCHEMA_VERSION)
         .map_err(|e| format!("Failed to write schema version marker: {}", e))?;
 
@@ -263,7 +256,6 @@ pub fn compute_stats(index: &Index, reader: &IndexReader, project_root: &Path) -
     let num_docs = searcher.num_docs();
     let num_segments = searcher.segment_readers().len();
 
-    // Compute index size on disk
     let index_path = index.directory().list_managed_files();
     let index_size_bytes: u64 = index_path
         .iter()
