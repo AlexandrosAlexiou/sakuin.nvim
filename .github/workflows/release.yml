@@ -38,6 +38,10 @@ jobs:
             target: x86_64-pc-windows-gnu
             artifact_name: sakuin-x86_64-windows.dll
             lib_name: sakuin.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: sakuin-aarch64-windows.dll
+            lib_name: sakuin.dll
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
