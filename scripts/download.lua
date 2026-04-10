@@ -15,6 +15,7 @@ M.artifacts = {
 	["OSX-arm64"] = "libsakuin-aarch64-darwin.dylib",
 	["OSX-x64"] = "libsakuin-x86_64-darwin.dylib",
 	["Windows-x64"] = "sakuin-x86_64-windows.dll",
+	["Windows-arm64"] = "sakuin-aarch64-windows.dll",
 }
 
 --- Map artifact names to the local filename they should be saved as.
@@ -24,6 +25,7 @@ M.local_names = {
 	["OSX-arm64"] = "libsakuin.dylib",
 	["OSX-x64"] = "libsakuin.dylib",
 	["Windows-x64"] = "sakuin.dll",
+	["Windows-arm64"] = "sakuin.dll",
 }
 
 --- Detect the current platform key.
