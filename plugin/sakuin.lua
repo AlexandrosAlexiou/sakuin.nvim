@@ -83,7 +83,7 @@ vim.api.nvim_create_user_command("SakuinCword", function(opts)
   end
 end, {
   range = true,
-  desc = "Search word under cursor (or visual selection) with sakuin",
+  desc = "Search word under cursor or visual selection with sakuin",
 })
 
 vim.api.nvim_create_user_command("SakuinBuild", function()

@@ -151,9 +151,9 @@ function M.setup(opts)
 				{ desc = "Sakuin search word under cursor" }
 			)
 			vim.keymap.set(
-				"v",
+				"x",
 				config.keymaps.search_cword,
-				":<C-u>SakuinCword<cr>",
+				'"vy:<C-u>lua require("sakuin.picker").sakuin({ search = vim.fn.getreg("v") })<CR>',
 				{ desc = "Sakuin search visual selection" }
 			)
 		end
