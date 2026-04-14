@@ -20,8 +20,6 @@ pub struct SearchParams<'a> {
     pub cancelled: &'a Arc<AtomicBool>,
 }
 
-const PATH_MATCH_SCORE: f32 = 0.0;
-
 pub fn search(
     reader: &IndexReader,
     schema: &Schema,
@@ -37,7 +35,6 @@ pub fn search(
     Ok(all_results)
 }
 
-/// Streaming search: calls `on_batch` with results as they are produced.
 pub fn search_streaming<F>(
     params: &SearchParams,
     batch_size: usize,
@@ -89,19 +86,18 @@ where
 
     let searcher = params.reader.searcher();
     let num_docs = searcher.num_docs() as usize;
-    let top_docs = if num_docs == 0 {
-        Vec::new()
-    } else {
-        searcher
-            .search(&tantivy_query, &TopDocs::with_limit(num_docs).order_by_score())
-            .map_err(|e| format!("Search failed: {}", e))?
-    };
+    if num_docs == 0 {
+        return Ok(());
+    }
+    let top_docs = searcher
+        .search(&tantivy_query, &TopDocs::with_limit(num_docs).order_by_score())
+        .map_err(|e| format!("Search failed: {}", e))?;
 
     if params.cancelled.load(Ordering::Relaxed) {
         return Ok(());
     }
 
-    let doc_infos: Vec<(String, std::path::PathBuf)> = top_docs
+    let doc_infos: Vec<_> = top_docs
         .into_iter()
         .filter_map(|(_score, doc_address)| {
             let doc: TantivyDocument = searcher.doc(doc_address).ok()?;
@@ -113,7 +109,7 @@ where
 
     let total_emitted = Arc::new(AtomicUsize::new(0));
 
-    let mut results: Vec<SearchResult> = doc_infos
+    let mut results: Vec<_> = doc_infos
         .par_iter()
         .flat_map_iter(|(rel_path, abs_path)| {
             if params.cancelled.load(Ordering::Relaxed)
@@ -135,30 +131,26 @@ where
                         line: 0,
                         col: 0,
                         snippet: String::new(),
-                        score: PATH_MATCH_SCORE,
+                        score: 0.0,
                     }]
                 } else {
                     vec![]
                 }
             } else {
                 let query_len = needle.len() as f32;
-                let file_density = (matches.len() as f32).log2().max(0.0) / 10.0;
-                let file_results: Vec<SearchResult> = matches
+                let density = (matches.len() as f32).log2().max(0.0) / 10.0;
+                let out: Vec<_> = matches
                     .into_iter()
-                    .map(|(line, col, snippet)| {
-                        let line_len = snippet.len().max(1) as f32;
-                        let query_ratio = (query_len / line_len).min(1.0);
-                        SearchResult {
-                            path: rel_path.clone(),
-                            line,
-                            col,
-                            snippet,
-                            score: query_ratio + file_density,
-                        }
+                    .map(|(line, col, snippet)| SearchResult {
+                        score: (query_len / snippet.len().max(1) as f32).min(1.0) + density,
+                        path: rel_path.clone(),
+                        line,
+                        col,
+                        snippet,
                     })
                     .collect();
-                total_emitted.fetch_add(file_results.len(), Ordering::Relaxed);
-                file_results
+                total_emitted.fetch_add(out.len(), Ordering::Relaxed);
+                out
             }
         })
         .collect();
