@@ -184,14 +184,14 @@ fn find_matching_lines(
         Err(_) => return Vec::new(),
     };
 
-    let contents_lower = contents.to_lowercase();
     let mut matches = Vec::new();
 
-    for (line_idx, (line, line_lower)) in contents.lines().zip(contents_lower.lines()).enumerate() {
+    for (line_idx, line) in contents.lines().enumerate() {
         if line_idx & 0x1FF == 0 && cancelled.load(Ordering::Relaxed) {
             return matches;
         }
-        if let Some(col) = line_lower.find(needle) {
+        // Lowercase per line: avoids allocating a second copy of the entire file.
+        if let Some(col) = line.to_lowercase().find(needle) {
             matches.push(((line_idx + 1) as u32, (col + 1) as u32, line.trim().to_string()));
         }
     }
