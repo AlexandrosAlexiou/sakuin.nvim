@@ -27,7 +27,13 @@ pub fn search(
     query_str: &str,
     cancelled: &Arc<AtomicBool>,
 ) -> Result<Vec<SearchResult>, String> {
-    let params = SearchParams { reader, schema, project_root, query_str, cancelled };
+    let params = SearchParams {
+        reader,
+        schema,
+        project_root,
+        query_str,
+        cancelled,
+    };
     let mut all_results = Vec::new();
     search_streaming(&params, usize::MAX, usize::MAX, |batch| {
         all_results.extend(batch);
@@ -69,15 +75,21 @@ where
                 let field_qs: Vec<(Occur, Box<dyn tantivy::query::Query>)> = fields
                     .iter()
                     .filter_map(|&f| {
-                        RegexQuery::from_pattern(&pattern, f)
-                            .ok()
-                            .map(|rq| (Occur::Should, Box::new(rq) as Box<dyn tantivy::query::Query>))
+                        RegexQuery::from_pattern(&pattern, f).ok().map(|rq| {
+                            (
+                                Occur::Should,
+                                Box::new(rq) as Box<dyn tantivy::query::Query>,
+                            )
+                        })
                     })
                     .collect();
                 if field_qs.is_empty() {
                     None
                 } else {
-                    Some((Occur::Must, Box::new(BooleanQuery::new(field_qs)) as Box<dyn tantivy::query::Query>))
+                    Some((
+                        Occur::Must,
+                        Box::new(BooleanQuery::new(field_qs)) as Box<dyn tantivy::query::Query>,
+                    ))
                 }
             })
             .collect();
@@ -90,7 +102,10 @@ where
         return Ok(());
     }
     let top_docs = searcher
-        .search(&tantivy_query, &TopDocs::with_limit(num_docs).order_by_score())
+        .search(
+            &tantivy_query,
+            &TopDocs::with_limit(num_docs).order_by_score(),
+        )
         .map_err(|e| format!("Search failed: {}", e))?;
 
     if params.cancelled.load(Ordering::Relaxed) {
@@ -155,7 +170,11 @@ where
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut emitted = 0;
     for chunk in results.chunks(batch_size) {
@@ -192,7 +211,11 @@ fn find_matching_lines(
         }
         // Lowercase per line: avoids allocating a second copy of the entire file.
         if let Some(col) = line.to_lowercase().find(needle) {
-            matches.push(((line_idx + 1) as u32, (col + 1) as u32, line.trim().to_string()));
+            matches.push((
+                (line_idx + 1) as u32,
+                (col + 1) as u32,
+                line.trim().to_string(),
+            ));
         }
     }
 
@@ -292,7 +315,10 @@ mod tests {
             setup_test_index(&[("config.rs", "let env = ProductionConfig::new();\n")]);
 
         let results = do_search(&reader, &schema, dir.path(), "Prod");
-        assert!(!results.is_empty(), "Expected 'Prod' to match 'ProductionConfig'");
+        assert!(
+            !results.is_empty(),
+            "Expected 'Prod' to match 'ProductionConfig'"
+        );
     }
 
     #[test]
@@ -300,7 +326,10 @@ mod tests {
         let (reader, schema, dir) = setup_test_index(&[("lower.rs", "let production = true;\n")]);
 
         let results = do_search(&reader, &schema, dir.path(), "PROD");
-        assert!(!results.is_empty(), "Expected 'PROD' to match 'production' case-insensitively");
+        assert!(
+            !results.is_empty(),
+            "Expected 'PROD' to match 'production' case-insensitively"
+        );
     }
 
     #[test]
@@ -319,7 +348,10 @@ mod tests {
         )]);
 
         let results = do_search(&reader, &schema, dir.path(), "threadPool");
-        assert!(results.is_empty(), "Expected 'threadPool' to NOT match separate 'thread' and 'pool'");
+        assert!(
+            results.is_empty(),
+            "Expected 'threadPool' to NOT match separate 'thread' and 'pool'"
+        );
     }
 
     #[test]
@@ -371,7 +403,10 @@ mod tests {
         )]);
 
         let results = do_search(&reader, &schema, dir.path(), "asynchronous programming");
-        assert!(results.is_empty(), "Phrase should not match words on separate lines");
+        assert!(
+            results.is_empty(),
+            "Phrase should not match words on separate lines"
+        );
     }
 
     #[test]
@@ -393,7 +428,10 @@ mod tests {
         let (reader, schema, dir) = setup_test_index(&[("src/production/config.rs", "// empty\n")]);
 
         let results = do_search(&reader, &schema, dir.path(), "production");
-        assert!(!results.is_empty(), "Expected 'production' to match the file path");
+        assert!(
+            !results.is_empty(),
+            "Expected 'production' to match the file path"
+        );
     }
 
     #[test]
@@ -420,7 +458,10 @@ mod tests {
             setup_test_index(&[("lib.rs", "use std::ffi::CString;\nlet ffi = something();\n")]);
 
         let results = do_search(&reader, &schema, dir.path(), "ffi::");
-        assert!(!results.is_empty(), "Expected 'ffi::' to match line containing 'ffi::CString'");
+        assert!(
+            !results.is_empty(),
+            "Expected 'ffi::' to match line containing 'ffi::CString'"
+        );
         assert_eq!(results.len(), 1, "Expected exactly 1 result for 'ffi::'");
         assert!(results[0].snippet.contains("ffi::CString"));
     }
@@ -430,7 +471,10 @@ mod tests {
         let (reader, schema, dir) = setup_test_index(&[("bare.rs", "let foo = 42;\n")]);
 
         let results = do_search(&reader, &schema, dir.path(), "foo::");
-        assert!(results.is_empty(), "Expected 'foo::' to NOT match bare 'foo'");
+        assert!(
+            results.is_empty(),
+            "Expected 'foo::' to NOT match bare 'foo'"
+        );
     }
 
     #[test]
@@ -474,7 +518,10 @@ mod tests {
         ]);
 
         let results = do_search(&reader, &schema, dir.path(), "::");
-        assert!(!results.is_empty(), "Expected '::' to match lines containing '::'");
+        assert!(
+            !results.is_empty(),
+            "Expected '::' to match lines containing '::'"
+        );
         assert_eq!(results[0].path, "main.rs");
         assert!(results[0].snippet.contains("::"));
         assert!(results.iter().all(|r| r.path == "main.rs"));
