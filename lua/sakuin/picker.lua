@@ -55,17 +55,13 @@ function M.sakuin(opts)
 
 				if msg_type == "batch" and results then
 					for _, r in ipairs(results) do
-						local line_nr = r.line or 0
-						local col_nr = (r.col or 1) - 1 -- 0-indexed for snacks
-						local snippet = (r.snippet or ""):match("^%s*(.-)%s*$") or ""
+						local col_nr = r.col - 1 -- 0-indexed for snacks
 						pending_items[#pending_items + 1] = {
 							file = r.path,
-							-- text is used for fuzzy matching (same format as grep source)
-							text = r.path .. ":" .. line_nr .. ":" .. col_nr .. ":" .. snippet,
-							pos = { line_nr, col_nr },
-							-- line is the snippet displayed after the filename by format="file"
-							line = snippet,
-							score_offset = r.score or 0,
+							text = r.path .. ":" .. r.line .. ":" .. col_nr .. ":" .. r.snippet,
+							pos = { r.line, col_nr },
+							line = r.snippet,
+							score_offset = r.score,
 						}
 					end
 					ctx.async:resume()
@@ -95,7 +91,7 @@ function M.sakuin(opts)
 			-- The `if not done` guard prevents a final suspend after the done event,
 			-- which would leave the coroutine suspended and never collected.
 			while not done do
-				while #pending_items > 0 do
+				if #pending_items > 0 then
 					local items = pending_items
 					pending_items = {}
 					for _, item in ipairs(items) do
