@@ -536,8 +536,14 @@ pub enum SearchResultMessage {
         results: Vec<crate::types::SearchResult>,
         total_so_far: u64,
     },
-    Done { generation: u64, total: u64 },
-    Error { generation: u64, error: String },
+    Done {
+        generation: u64,
+        total: u64,
+    },
+    Error {
+        generation: u64,
+        error: String,
+    },
 }
 
 /// The shared result queue. The worker pushes here, Lua drains via `search_take_result`.
@@ -682,12 +688,15 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                 cancelled: &cancel_flag,
             };
             search::search_streaming(&params, batch_size, limit, |batch| {
-                let cumulative = total_ref.fetch_add(batch.len() as u64, Ordering::Relaxed) + batch.len() as u64;
-                search_result_queue().lock().push_back(SearchResultMessage::Batch {
-                    generation,
-                    results: batch,
-                    total_so_far: cumulative,
-                });
+                let cumulative =
+                    total_ref.fetch_add(batch.len() as u64, Ordering::Relaxed) + batch.len() as u64;
+                search_result_queue()
+                    .lock()
+                    .push_back(SearchResultMessage::Batch {
+                        generation,
+                        results: batch,
+                        total_so_far: cumulative,
+                    });
                 notify_main_thread();
             })
         }));

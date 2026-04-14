@@ -99,7 +99,8 @@ mod ffi_exports {
                         });
                     }
                     Err(e) => {
-                        prog.status.store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
+                        prog.status
+                            .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
                         ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
                             status: "error",
@@ -131,7 +132,8 @@ mod ffi_exports {
                         });
                     }
                     Err(e) => {
-                        prog.status.store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
+                        prog.status
+                            .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
                         ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
                             status: "error",
@@ -171,7 +173,10 @@ mod ffi_exports {
             state::PROGRESS_ERROR => "error",
             _ => "idle",
         };
-        let json = format!(r#"{{"total":{},"done":{},"status":"{}"}}"#, total, done, status);
+        let json = format!(
+            r#"{{"total":{},"done":{},"status":"{}"}}"#,
+            total, done, status
+        );
         ffi::str_to_c(&json)
     }
 
