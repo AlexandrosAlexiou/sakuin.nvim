@@ -622,12 +622,6 @@ struct SearchRequest {
     limit: usize,
 }
 
-/// Sentinel value: a request with an empty query and generation=0 signals the worker to exit.
-impl SearchRequest {
-    fn is_shutdown(&self) -> bool {
-        self.generation == 0 && self.query.is_empty()
-    }
-}
 
 /// The persistent search worker state.
 struct SearchWorker {
@@ -687,16 +681,9 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             Err(_) => break,
         };
 
-        if request.is_shutdown() {
-            break;
-        }
-
         // Drain the channel: if multiple requests queued up, only execute the latest one.
         let mut latest = request;
         while let Ok(newer) = rx.try_recv() {
-            if newer.is_shutdown() {
-                return; // exit immediately on shutdown
-            }
             latest = newer;
         }
 
@@ -830,34 +817,11 @@ pub fn search_cancel() {
     }
 }
 
-/// Shut down the persistent search worker thread.
 fn search_worker_shutdown() {
     let mut guard = search_worker_state().lock();
     if let Some(worker) = guard.take() {
         worker.cancel_flag.store(true, Ordering::SeqCst);
-        let _ = worker.sender.send(SearchRequest {
-            query: String::new(),
-            generation: 0,
-            reader: {
-                // We need a reader for the struct, but since this is a shutdown sentinel,
-                // we'll grab one from global state if available, or just drop the sender
-                // which will cause the worker to exit via channel disconnect.
-                let state_guard = global_state().lock();
-                match state_guard.as_ref() {
-                    Some(state) => state.reader.clone(),
-                    None => {
-                        // Can't construct a reader, just drop sender to disconnect channel
-                        drop(worker);
-                        return;
-                    }
-                }
-            },
-            schema: Schema::builder().build(),
-            project_root: PathBuf::new(),
-            batch_size: 500,
-            limit: usize::MAX,
-        });
-        // The worker will exit on receiving the shutdown sentinel or channel disconnect
+        // Dropping worker disconnects the channel; worker_loop exits on Err(_).
     }
 }
 

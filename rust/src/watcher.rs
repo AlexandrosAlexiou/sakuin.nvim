@@ -14,21 +14,15 @@ pub struct WatcherHandle {
 impl WatcherHandle {
     pub fn stop(self) {
         self.stop_flag.store(true, Ordering::SeqCst);
-        // The watcher is dropped here, which stops the OS-level watch.
     }
 }
 
-/// Start watching the project directory for file changes.
-///
-/// File events are debounced and dispatched to `state::reindex_file` or
-/// `state::remove_indexed_file` as appropriate.
 pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHandle, String> {
     let project_root = project_root.to_path_buf();
     let index_dir = index_dir.to_path_buf();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_clone = stop_flag.clone();
 
-    // We use a channel-based approach so we can process events with debouncing.
     let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
 
     let mut watcher = RecommendedWatcher::new(
@@ -43,11 +37,9 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
         .watch(&project_root, RecursiveMode::Recursive)
         .map_err(|e| format!("Failed to start watching {:?}: {}", project_root, e))?;
 
-    // Spawn a thread to process events with debouncing
-    let project_root_clone = project_root.clone();
     let index_dir_clone = index_dir.clone();
     std::thread::spawn(move || {
-        process_events(rx, stop_flag_clone, &project_root_clone, &index_dir_clone);
+        process_events(rx, stop_flag_clone, &index_dir_clone);
     });
 
     Ok(WatcherHandle {
@@ -56,14 +48,9 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
     })
 }
 
-/// Process filesystem events from the watcher channel.
-///
-/// Uses a simple debouncing strategy: collect events for a short window,
-/// then batch-process unique file paths.
 fn process_events(
     rx: std::sync::mpsc::Receiver<notify::Result<Event>>,
     stop_flag: Arc<AtomicBool>,
-    _project_root: &Path,
     index_dir: &Path,
 ) {
     use std::collections::HashSet;
@@ -75,7 +62,6 @@ fn process_events(
             break;
         }
 
-        // Wait for the first event (blocking, with timeout so we can check stop_flag)
         let event = match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Ok(event)) => event,
             Ok(Err(e)) => {
@@ -86,13 +72,11 @@ fn process_events(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
-        // Collect this event and any more that arrive within the debounce window
         let mut paths_to_reindex: HashSet<PathBuf> = HashSet::new();
         let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
 
         categorize_event(&event, &mut paths_to_reindex, &mut paths_to_remove);
 
-        // Drain additional events within the debounce window
         let deadline = std::time::Instant::now() + debounce_duration;
         while std::time::Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(50)) {
@@ -104,11 +88,9 @@ fn process_events(
             }
         }
 
-        // Filter out paths inside the index directory itself
         paths_to_reindex.retain(|p| !p.starts_with(index_dir));
         paths_to_remove.retain(|p| !p.starts_with(index_dir));
 
-        // Batch all deletes + reindexes into a single commit
         let to_remove: Vec<PathBuf> = paths_to_remove.into_iter().collect();
         let to_reindex: Vec<PathBuf> = paths_to_reindex
             .into_iter()
@@ -128,7 +110,6 @@ fn process_events(
     }
 }
 
-/// Categorize a notify event into reindex or remove sets.
 fn categorize_event(
     event: &Event,
     reindex: &mut std::collections::HashSet<PathBuf>,
