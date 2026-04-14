@@ -2,7 +2,6 @@
 
 local M = {}
 
---- Format bytes into a human-readable string.
 ---@param bytes number
 ---@return string
 local function format_bytes(bytes)

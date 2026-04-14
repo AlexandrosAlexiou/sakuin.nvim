@@ -5,10 +5,8 @@
 
 local M = {}
 
---- GitHub repository
 M.repo = "AlexandrosAlexiou/sakuin.nvim"
 
---- Map of (os, arch) to the artifact filename on GitHub Releases.
 M.artifacts = {
 	["Linux-x64"] = "libsakuin-x86_64-linux.so",
 	["Linux-arm64"] = "libsakuin-aarch64-linux.so",
@@ -18,7 +16,6 @@ M.artifacts = {
 	["Windows-arm64"] = "sakuin-aarch64-windows.dll",
 }
 
---- Map artifact names to the local filename they should be saved as.
 M.local_names = {
 	["Linux-x64"] = "libsakuin.so",
 	["Linux-arm64"] = "libsakuin.so",
@@ -50,7 +47,7 @@ end
 --- Get the plugin root directory.
 ---@return string
 function M.plugin_root()
-	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading @
+	local source = debug.getinfo(1, "S").source:sub(2)
 	return vim.fn.fnamemodify(source, ":h:h")
 end
 
@@ -70,10 +67,8 @@ function M.download(version)
 	local build_dir = root .. "/build"
 	local dest = build_dir .. "/" .. local_name
 
-	-- Ensure build directory exists
 	vim.fn.mkdir(build_dir, "p")
 
-	-- Determine download URL
 	local url
 	if version then
 		url = string.format("https://github.com/%s/releases/download/%s/%s", M.repo, version, artifact)

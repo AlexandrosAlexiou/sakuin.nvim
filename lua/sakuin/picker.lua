@@ -68,7 +68,6 @@ function M.sakuin(opts)
 							score_offset = r.score or 0,
 						}
 					end
-					-- Wake the async coroutine if it's sleeping
 					ctx.async:resume()
 				elseif msg_type == "done" then
 					done = true
@@ -80,7 +79,6 @@ function M.sakuin(opts)
 				end
 			end)
 
-			-- Submit the search to the Rust worker
 			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, batch_size, search_limit)
 			if rc ~= 0 then
 				if submit_err then
@@ -91,10 +89,12 @@ function M.sakuin(opts)
 				return
 			end
 
-			-- Async loop: yield items as they arrive from the Rust worker.
-			-- We sleep and get woken up when new batches arrive.
+			-- Not a busy loop: ctx.async:suspend() yields the coroutine entirely.
+			-- The search callback calls ctx.async:resume() once per batch/done/error,
+			-- so this loop body executes exactly once per rust event, no polling.
+			-- The `if not done` guard prevents a final suspend after the done event,
+			-- which would leave the coroutine suspended and never collected.
 			while not done do
-				-- Yield any pending items to snacks
 				while #pending_items > 0 do
 					local items = pending_items
 					pending_items = {}
@@ -108,12 +108,10 @@ function M.sakuin(opts)
 				end
 			end
 
-			-- Yield any remaining items after done
 			for _, item in ipairs(pending_items) do
 				cb(item)
 			end
 
-			-- Clear the callback
 			sakuin_ffi.set_search_callback(nil)
 
 			if error_msg then
@@ -124,7 +122,6 @@ function M.sakuin(opts)
 		end
 	end
 
-	-- Merge user opts with our source config
 	local picker_opts = vim.tbl_deep_extend("force", {
 		title = "Sakuin Search",
 		finder = finder,

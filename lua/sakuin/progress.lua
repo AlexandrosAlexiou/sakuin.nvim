@@ -2,19 +2,16 @@
 
 local M = {}
 
---- Whether indexing/sync is currently in progress.
 ---@type boolean
 M.is_indexing = false
 
---- Check if progress notifications are enabled.
 ---@return boolean
 local function is_enabled()
 	local config = require("sakuin.config").get()
 	return not config.progress or config.progress.enabled ~= false
 end
 
---- Called when indexing starts.
----@param label string e.g. "Syncing", "Rebuilding"
+---@param label string
 function M.start(label)
 	M.is_indexing = true
 	if is_enabled() then
@@ -22,7 +19,6 @@ function M.start(label)
 	end
 end
 
---- Called when indexing finishes successfully.
 ---@param message? string
 function M.done(message)
 	M.is_indexing = false
@@ -31,7 +27,6 @@ function M.done(message)
 	end
 end
 
---- Called when indexing fails.
 ---@param label string
 ---@param err string
 function M.fail(label, err)

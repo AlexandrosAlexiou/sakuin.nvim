@@ -3,7 +3,6 @@
 
 local M = {}
 
---- Whether the engine has been initialized (load + init completed).
 ---@type boolean
 local initialized = false
 
@@ -107,7 +106,6 @@ local function deferred_startup(config)
 		end
 	end
 
-	-- Kick off incremental sync (async)
 	if config.update_on_start then
 		local update_rc = ffi_mod.update_index_async()
 		if update_rc == 0 then
@@ -131,7 +129,6 @@ end
 function M.setup(opts)
 	local config = require("sakuin.config").apply(opts or {})
 
-	-- Register autocommand to shut down on VimLeavePre
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		callback = function()
 			local ffi_mod = require("sakuin.ffi")
@@ -142,7 +139,6 @@ function M.setup(opts)
 		desc = "Shut down sakuin engine on exit",
 	})
 
-	-- Register keymaps (keymaps = false disables all)
 	if type(config.keymaps) == "table" then
 		if config.keymaps.search then
 			vim.keymap.set("n", config.keymaps.search, "<cmd>Sakuin<cr>", { desc = "Sakuin search" })
@@ -166,16 +162,14 @@ function M.setup(opts)
 		end
 	end
 
-	-- Defer all heavy work so setup() returns immediately
 	vim.schedule(function()
 		deferred_startup(config)
 	end)
 end
 
---- Search the index programmatically.
----@param query string The search query
----@return table|nil results Array of search results
----@return string|nil error Error message if search failed
+---@param query string
+---@return table|nil
+---@return string|nil
 function M.search(query)
 	if not initialized then
 		return nil, "sakuin is not initialized yet"
@@ -183,8 +177,6 @@ function M.search(query)
 	return require("sakuin.ffi").search(query)
 end
 
---- Start an async build/update with progress.
---- Exposed for use by commands.
 --- On the first :SakuinBuild, lazy-initializes the engine if needed.
 ---@param mode string "build" or "update"
 function M.async_index(mode)

@@ -61,7 +61,6 @@ local M = {}
 ---@type ffi.namespace*|nil
 local lib = nil
 
---- Return the loaded native library, or error if not yet loaded.
 ---@return ffi.namespace*
 local function get_lib()
 	if not lib then
@@ -70,23 +69,15 @@ local function get_lib()
 	return lib
 end
 
---- The registered Lua callback for search results (streaming).
---- Set via M.set_search_callback(). Always called on the main Neovim thread.
---- Signature: callback(msg_type, generation, results_or_nil, error_or_nil, total_so_far_or_nil)
---- msg_type is "batch", "done", or "error".
 ---@type fun(msg_type: string, generation: number, results: table|nil, error: string|nil, total: number|nil)|nil
 local lua_search_callback = nil
 
---- The registered Lua callback for indexing completion events.
---- Set via M.set_indexing_callback(). Always called on the main Neovim thread.
----@type fun(event: table)|nil   event = { status, total, done, error? }
+---@type fun(event: table)|nil
 local lua_indexing_callback = nil
 
---- The uv_async handle. Kept alive to prevent GC.
-local async_handle = nil
+local async_handle = nil -- kept alive to prevent GC
 
---- Resolve the path to the native library based on the current OS.
----@return string path Absolute path to the shared library
+---@return string
 local function resolve_lib_path()
 	-- Get the plugin root directory from this file's location:
 	-- lua/sakuin/ffi.lua -> ../../ -> plugin root
@@ -107,15 +98,13 @@ local function resolve_lib_path()
 	return plugin_root .. "/build/" .. prefix .. "sakuin" .. ext
 end
 
---- Called on the main Neovim thread when the Rust worker signals via uv_async_send.
---- The same async channel carries both search results and indexing events; we drain
---- both slots every time we wake up.
+-- Called on the main Neovim thread via uv_async_send. Drains both the indexing
+-- event slot and the search result queue on every wake-up.
 local function on_async_notification()
 	if not lib then
 		return
 	end
 
-	-- Check for an indexing completion event (pushed by build/update async threads).
 	local idx_raw = lib.sakuin_indexing_take_event()
 	if idx_raw ~= nil then
 		local json_str = ffi.string(idx_raw)
@@ -126,12 +115,11 @@ local function on_async_notification()
 		end
 	end
 
-	-- Drain all search result messages from the queue.
 	-- The worker pushes batch/done/error messages; we may have multiple per wake-up.
 	while true do
 		local raw = lib.sakuin_search_take_result()
 		if raw == nil then
-			break -- queue is empty
+			break
 		end
 
 		local json_str = ffi.string(raw)
@@ -157,7 +145,6 @@ local function on_async_notification()
 	end
 end
 
---- Load the native library. Must be called before any other FFI function.
 function M.load()
 	if lib then
 		return
@@ -174,7 +161,6 @@ function M.load()
 
 	lib = ffi.load(lib_path)
 
-	-- Create a libuv async handle. Its callback runs on the main Neovim thread.
 	async_handle = vim.uv.new_async(function()
 		-- vim.schedule to ensure we're fully in the Neovim event loop context
 		vim.schedule(on_async_notification)
@@ -188,11 +174,8 @@ function M.load()
 	-- dereference once to get the actual handle pointer.
 	local handle_ptr = ffi.cast("void**", async_handle)[0]
 
-	-- Get the uv_async_send function pointer.
-	-- Neovim links libuv and exports its symbols in the process's global symbol
-	-- table. ffi.C accesses these symbols on all platforms.
-	-- Signature: int uv_async_send(uv_async_t* handle)
-	-- Docs: https://docs.libuv.org/en/v1.x/async.html
+	-- Neovim exports libuv symbols into the process global symbol table;
+	-- ffi.C accesses them on all platforms. Docs: https://docs.libuv.org/en/v1.x/async.html
 	local ok_send, send_fn_ptr = pcall(function()
 		return ffi.C.uv_async_send
 	end)
@@ -204,55 +187,46 @@ function M.load()
 		)
 	end
 
-	-- Register with Rust so the worker thread can call uv_async_send(handle)
 	lib.sakuin_register_async_notifier(ffi.cast("void*", handle_ptr), ffi.cast("void*", send_fn_ptr))
 end
 
---- Check if the native library is loaded.
 ---@return boolean
 function M.is_loaded()
 	return lib ~= nil
 end
 
---- Initialize the engine.
----@param project_root string Absolute path to the project directory
----@param index_dir string Absolute path to the index directory
----@param config_json string JSON-serialized SakuinConfig (ignored if nil)
----@return number rc 0 on success, -1 on error
+---@param project_root string
+---@param index_dir string
+---@param config_json string
+---@return number
 function M.init(project_root, index_dir, config_json)
 	return get_lib().sakuin_init(project_root, index_dir, config_json)
 end
 
---- Shut down the engine.
 function M.shutdown()
 	if lib then
 		lib.sakuin_shutdown()
 	end
-	-- Close the async handle
 	if async_handle and not async_handle:is_closing() then
 		async_handle:close()
 	end
 end
 
---- Full index rebuild.
----@return number rc 0 on success, -1 on error
+---@return number
 function M.build_index()
 	return get_lib().sakuin_build_index()
 end
 
---- Incremental index update.
----@return number rc 0 on success, -1 on error
+---@return number
 function M.update_index()
 	return get_lib().sakuin_update_index()
 end
 
---- Start the filesystem watcher.
----@return number rc 0 on success, -1 on error
+---@return number
 function M.start_watcher()
 	return get_lib().sakuin_start_watcher()
 end
 
---- Stop the filesystem watcher.
 function M.stop_watcher()
 	if lib then
 		lib.sakuin_stop_watcher()
@@ -298,15 +272,14 @@ function M.search_submit(query, generation, batch_size, limit)
 	return 0, nil
 end
 
---- Cancel any in-flight async search.
 function M.search_cancel()
 	get_lib().sakuin_search_cancel()
 end
 
---- Execute a search query (synchronous — blocks the caller).
----@param query string The search query
----@return table|nil results Array of {path, line, col, snippet, score}
----@return string|nil error Error message on failure
+--- Synchronous search — blocks the caller.
+---@param query string
+---@return table|nil results
+---@return string|nil error
 function M.search(query)
 	local l = get_lib()
 	local raw = l.sakuin_search(query)
@@ -325,9 +298,8 @@ function M.search(query)
 	return decoded, nil
 end
 
---- Get index statistics.
----@return table|nil stats {num_docs, num_segments, index_size_bytes, project_root}
----@return string|nil error Error message on failure
+---@return table|nil stats
+---@return string|nil error
 function M.stats()
 	local l = get_lib()
 	local raw = l.sakuin_stats()
@@ -346,21 +318,18 @@ function M.stats()
 	return decoded, nil
 end
 
---- Spawn a full index rebuild on a background thread (non-blocking).
----@return number rc 0 on success, -1 on error
+---@return number
 function M.build_index_async()
 	return get_lib().sakuin_build_index_async()
 end
 
---- Spawn an incremental index update on a background thread (non-blocking).
----@return number rc 0 on success, -1 on error
+---@return number
 function M.update_index_async()
 	return get_lib().sakuin_update_index_async()
 end
 
---- Get the progress of the current async build/update operation.
----@return table|nil progress {total, done, status} where status is "idle"|"running"|"done"|"error"
----@return string|nil error Error message on failure
+---@return table|nil progress {total, done, status}
+---@return string|nil error
 function M.get_progress()
 	local l = get_lib()
 	local raw = l.sakuin_get_progress()
@@ -379,8 +348,7 @@ function M.get_progress()
 	return decoded, nil
 end
 
---- Get the last error message from the Rust side.
----@return string|nil error The error message, or nil if no error
+---@return string|nil
 function M.last_error()
 	local l = get_lib()
 	local raw = l.sakuin_last_error()

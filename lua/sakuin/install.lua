@@ -3,14 +3,12 @@
 
 local M = {}
 
---- Get the plugin root directory.
 ---@return string
 local function plugin_root()
 	local source = debug.getinfo(1, "S").source:sub(2)
 	return vim.fn.fnamemodify(source, ":h:h:h")
 end
 
---- Resolve the expected path to the native library.
 ---@return string path, string lib_name
 local function lib_path()
 	local root = plugin_root()
@@ -32,7 +30,6 @@ local function lib_path()
 	return root .. "/build/" .. name, name
 end
 
---- Check whether the native library already exists.
 ---@return boolean
 function M.has_binary()
 	local path = lib_path()
@@ -62,12 +59,10 @@ local function try_cargo_build()
 	local root = plugin_root()
 	local build_script = root .. "/scripts/build.sh"
 
-	-- Check if cargo is available
 	if vim.fn.executable("cargo") == 0 then
 		return false, "cargo not found in PATH"
 	end
 
-	-- Prefer the build script if it exists
 	if vim.fn.filereadable(build_script) == 1 then
 		print("[sakuin] Building from source with scripts/build.sh ...")
 		local result = os.execute("bash " .. vim.fn.shellescape(build_script))
@@ -90,7 +85,6 @@ local function try_cargo_build()
 		return false, "cargo build failed"
 	end
 
-	-- Copy the library to build/
 	local _, lib_name = lib_path()
 	local build_dir = root .. "/build"
 	vim.fn.mkdir(build_dir, "p")
@@ -112,13 +106,11 @@ end
 function M.ensure_binary(opts)
 	opts = opts or {}
 
-	-- Already have it?
 	if M.has_binary() then
 		print("[sakuin] Native library already present.")
 		return
 	end
 
-	-- Try downloading prebuilt binary
 	print("[sakuin] Native library not found. Attempting download ...")
 	local dl_ok, dl_err = try_download(opts.version)
 	if dl_ok then
@@ -129,14 +121,12 @@ function M.ensure_binary(opts)
 	print("[sakuin] Download failed: " .. (dl_err or "unknown error"))
 	print("[sakuin] Falling back to building from source ...")
 
-	-- Try building from source
 	local build_ok, build_err = try_cargo_build()
 	if build_ok then
 		print("[sakuin] Built from source successfully.")
 		return
 	end
 
-	-- Both failed
 	local msg = string.format(
 		"[sakuin] Failed to obtain native library.\n"
 			.. "  Download error: %s\n"

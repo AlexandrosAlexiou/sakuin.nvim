@@ -6,7 +6,6 @@ if vim.g.loaded_sakuin then
 end
 vim.g.loaded_sakuin = true
 
---- Format bytes into a human-readable string.
 ---@param bytes number
 ---@return string
 local function format_bytes(bytes)
@@ -21,7 +20,6 @@ local function format_bytes(bytes)
   end
 end
 
---- Get the visual selection text.
 ---@return string
 local function get_visual_selection()
   -- Exit visual mode to update '< and '> marks
@@ -32,7 +30,6 @@ local function get_visual_selection()
   return table.concat(lines, " ")
 end
 
--- User commands
 vim.api.nvim_create_user_command("Sakuin", function(opts)
   local has_snacks, _ = pcall(require, "snacks")
   if not has_snacks then
