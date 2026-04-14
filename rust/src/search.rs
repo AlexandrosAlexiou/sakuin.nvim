@@ -20,7 +20,6 @@ pub struct SearchParams<'a> {
     pub cancelled: &'a Arc<AtomicBool>,
 }
 
-/// Score for path-only matches (no content line).
 const PATH_MATCH_SCORE: f32 = 0.0;
 
 pub fn search(
@@ -53,7 +52,6 @@ where
         return Ok(());
     }
 
-    // The exact string we look for in every line (case-insensitive).
     let needle = query_str.to_lowercase();
 
     let body_field = params.schema.get_field(FIELD_BODY).unwrap();
@@ -61,10 +59,8 @@ where
     let filename_field = params.schema.get_field(FIELD_FILENAME).unwrap();
     let fields = [body_field, path_field, filename_field];
 
-    // For Tantivy candidate retrieval: split the query into alphanumeric chunks
-    // (matching how Tantivy's tokenizer indexes text). Each chunk must appear in
-    // the document (AND). Pure-punctuation queries fall back to AllQuery so that
-    // every document is still scanned by line-level matching.
+    // Tantivy candidate retrieval: chunks must all appear in the document (AND).
+    // Pure-punctuation queries fall back to AllQuery for line-level scanning.
     let chunks = alphanumeric_chunks(&needle);
     let tantivy_query: Box<dyn tantivy::query::Query> = if chunks.is_empty() {
         Box::new(AllQuery)
@@ -132,7 +128,6 @@ where
                 if !abs_path.exists() {
                     return vec![];
                 }
-                // No content match — check if the path itself contains the needle.
                 if rel_path.to_lowercase().contains(needle.as_str()) {
                     total_emitted.fetch_add(1, Ordering::Relaxed);
                     vec![SearchResult {
@@ -146,7 +141,6 @@ where
                     vec![]
                 }
             } else {
-                // Score: ratio of query length to line length + log density bonus.
                 let query_len = needle.len() as f32;
                 let file_density = (matches.len() as f32).log2().max(0.0) / 10.0;
                 let file_results: Vec<SearchResult> = matches
@@ -188,8 +182,6 @@ where
     Ok(())
 }
 
-/// Find all lines in a file that contain `needle` as a case-insensitive literal substring.
-/// Returns `(line_number, col, snippet)` for each matching line.
 fn find_matching_lines(
     file_path: &Path,
     needle: &str,
