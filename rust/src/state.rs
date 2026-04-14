@@ -230,8 +230,6 @@ pub fn build_index() -> Result<u64, String> {
     let done_counter = Arc::new(AtomicU64::new(0));
     let done_ref = done_counter.clone();
 
-    // Reader thread: rayon reads files in parallel and sends prepared docs to
-    // the writer through the channel. Blocks on send when the channel is full.
     let reader = std::thread::spawn(move || {
         files.par_iter().for_each(|file_path| {
             let result = prepare_doc(&project_root, file_path);
@@ -295,12 +293,6 @@ pub fn build_index() -> Result<u64, String> {
     Ok(indexed_count)
 }
 
-/// Incremental update: re-index changed files, remove deleted files.
-///
-/// Uses a single segment-level scan to build a `path → mtime` map from the
-/// index, then compares with the files on disk. This replaces the previous
-/// N+1 query pattern (one `all_indexed_paths` scan + one `get_stored_mtime`
-/// TermQuery per file). File reading is parallelized across all CPU cores.
 pub fn update_index() -> Result<(u64, u64, u64), String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -320,8 +312,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     notify_main_thread();
     let files_on_disk = walker::walk_project(&state.project_root, &state.config);
 
-    // Single pass: collect every indexed path and its stored mtime.
-    // This replaces `all_indexed_paths` (TopDocs scan) + per-file `get_stored_mtime`.
     *indexing_event_slot().lock() = Some(IndexingEvent {
         total: 0,
         done: 0,
@@ -351,8 +341,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         }
     }
 
-    // Phase 2: Figure out which files need indexing (new or changed mtime).
-    // mtime comes from the map built above — no extra index queries needed.
     let files_to_index: Vec<(PathBuf, bool)> = files_on_disk
         .iter()
         .filter_map(|file_path| {
@@ -472,7 +460,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     Ok((added, updated, removed))
 }
 
-/// Search the index (synchronous, blocks caller).
 pub fn do_search(query: &str) -> Result<Vec<SearchResult>, String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -526,12 +513,10 @@ fn indexing_event_slot() -> &'static Mutex<Option<IndexingEvent>> {
     INDEXING_EVENT.get_or_init(|| Mutex::new(None))
 }
 
-/// Atomically take the latest indexing event from the shared slot.
 pub fn indexing_take_event() -> Option<IndexingEvent> {
     indexing_event_slot().lock().take()
 }
 
-/// Store an indexing event and wake the main Neovim thread via uv_async_send.
 pub fn push_indexing_event(event: IndexingEvent) {
     {
         let mut slot = indexing_event_slot().lock();
@@ -604,9 +589,6 @@ pub fn register_async_notifier(
     });
 }
 
-/// Atomically take the next search result message from the queue.
-///
-/// Returns `None` if the queue is empty.
 pub fn search_take_result() -> Option<SearchResultMessage> {
     search_result_queue().lock().pop_front()
 }
@@ -621,7 +603,6 @@ struct SearchRequest {
     batch_size: usize,
     limit: usize,
 }
-
 
 /// The persistent search worker state.
 struct SearchWorker {
@@ -661,9 +642,6 @@ fn ensure_worker() {
     });
 }
 
-/// Notify the main Neovim thread that a result is available.
-///
-/// Calls `uv_async_send(handle)` which is safe from any thread.
 fn notify_main_thread() {
     let guard = async_notifier().lock();
     if let Some(notifier) = guard.as_ref() {
@@ -715,13 +693,11 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                 let cumulative = total_ref.fetch_add(count, Ordering::Relaxed) + count;
                 match serde_json::to_string(&batch) {
                     Ok(json) => {
-                        search_result_queue()
-                            .lock()
-                            .push_back(SearchResultMessage::Batch {
-                                generation,
-                                results_json: json,
-                                total_so_far: cumulative,
-                            });
+                        search_result_queue().lock().push_back(SearchResultMessage::Batch {
+                            generation,
+                            results_json: json,
+                            total_so_far: cumulative,
+                        });
                         notify_main_thread();
                     }
                     Err(e) => {
@@ -788,7 +764,6 @@ pub fn search_submit(
     let mut worker_guard = search_worker_state().lock();
     let worker = worker_guard.as_mut().ok_or("search worker not running")?;
 
-    // Cancel any in-flight search
     worker.cancel_flag.store(true, Ordering::SeqCst);
 
     let request = SearchRequest {
@@ -809,7 +784,6 @@ pub fn search_submit(
     Ok(())
 }
 
-/// Cancel any in-flight search on the worker thread.
 pub fn search_cancel() {
     let guard = search_worker_state().lock();
     if let Some(worker) = guard.as_ref() {
@@ -825,7 +799,6 @@ fn search_worker_shutdown() {
     }
 }
 
-/// Get index statistics.
 pub fn stats() -> Result<IndexStats, String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -837,7 +810,6 @@ pub fn stats() -> Result<IndexStats, String> {
     ))
 }
 
-/// Start the filesystem watcher.
 pub fn start_watcher() -> Result<(), String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -854,7 +826,6 @@ pub fn start_watcher() -> Result<(), String> {
     Ok(())
 }
 
-/// Stop the filesystem watcher.
 pub fn stop_watcher() {
     let guard = global_state().lock();
     if let Some(state) = guard.as_ref() {
@@ -866,11 +837,6 @@ pub fn stop_watcher() {
     }
 }
 
-/// Batch-update the index for a set of watcher events in a single commit.
-///
-/// Previous design called `reindex_file` / `remove_indexed_file` once per file,
-/// each doing its own `commit()` + `reload()`. A burst of N changes (e.g. after
-/// `git checkout`) produced N commits. Now all deletes and re-indexes share one.
 pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Result<(), String> {
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;

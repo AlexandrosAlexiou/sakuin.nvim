@@ -5,11 +5,6 @@ use parking_lot::Mutex;
 
 use crate::types::SakuinConfig;
 
-/// Walk the project directory and return all indexable file paths.
-///
-/// Uses parallel walking via rayon to fully utilise all CPU cores.
-/// Respects .gitignore, .ignore, hidden files, and the config's ignore patterns
-/// and size/extension filters.
 pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(project_root);
 
@@ -22,7 +17,6 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
         .ignore(use_git)
         .threads(num_cpus());
 
-    // Add custom ignore globs
     if !config.ignore_patterns.is_empty() {
         let mut overrides = ignore::overrides::OverrideBuilder::new(project_root);
         for pat in &config.ignore_patterns {
@@ -83,14 +77,12 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
     files.into_inner()
 }
 
-/// Return a sensible number of CPUs for parallel work.
 fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
 }
 
-/// Extensions that are always binary — skip without reading file content.
 static BINARY_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "svg", "pdf", "doc", "docx", "xls",
     "xlsx", "ppt", "pptx", "zip", "gz", "tar", "bz2", "xz", "zst", "7z", "rar", "exe", "dll", "so",
@@ -178,11 +170,6 @@ static TEXT_EXTENSIONS: &[&str] = &[
     "mod",
 ];
 
-/// Heuristic binary file detection.
-///
-/// First checks the file extension against known binary/text lists to avoid
-/// I/O entirely for the common case. Falls back to reading up to 8 KB and
-/// counting null bytes for unknown extensions.
 fn is_likely_binary(path: &Path) -> bool {
     use std::fs::File;
     use std::io::Read;
