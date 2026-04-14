@@ -87,7 +87,7 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index = Index::open_or_create(dir, schema)
         .map_err(|e| format!("Failed to open or create index: {}", e))?;
 
-    let code_analyzer = TextAnalyzer::builder(CodeTokenizer::new())
+    let code_analyzer = TextAnalyzer::builder(CodeTokenizer::default())
         .filter(RemoveLongFilter::limit(100))
         .filter(LowerCaser)
         .build();

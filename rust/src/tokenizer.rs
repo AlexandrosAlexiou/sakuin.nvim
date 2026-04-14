@@ -20,15 +20,6 @@ pub struct CodeTokenizer {
     token: Token,
 }
 
-impl CodeTokenizer {
-    pub fn new() -> Self {
-        Self {
-            token: Token::default(),
-        }
-    }
-}
-
-/// Classification of a character for splitting purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CharKind {
     Upper,
@@ -50,9 +41,6 @@ fn classify(c: char) -> CharKind {
     }
 }
 
-/// Extract sub-word boundaries from `text`.
-///
-/// Returns a list of `(byte_start, byte_end)` pairs, one per token.
 pub fn split_code(text: &str) -> Vec<(usize, usize)> {
     let mut tokens = Vec::new();
     let chars: Vec<(usize, char)> = text.char_indices().collect();
@@ -180,7 +168,7 @@ mod tests {
     use super::*;
 
     fn tokenize(text: &str) -> Vec<String> {
-        let mut tokenizer = CodeTokenizer::new();
+        let mut tokenizer = CodeTokenizer::default();
         let mut stream = tokenizer.token_stream(text);
         let mut tokens = Vec::new();
         while stream.advance() {
