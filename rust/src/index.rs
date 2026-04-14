@@ -9,7 +9,6 @@ use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocumen
 use crate::tokenizer::{CodeTokenizer, CODE_TOKENIZER_NAME};
 use crate::types::IndexStats;
 
-/// Field names used in the schema.
 pub const FIELD_PATH: &str = "path";
 pub const FIELD_PATH_EXACT: &str = "path_exact";
 pub const FIELD_FILENAME: &str = "filename";
@@ -18,7 +17,6 @@ pub const FIELD_BODY: &str = "body";
 pub const FIELD_MODIFIED: &str = "modified";
 pub const FIELD_SIZE: &str = "size";
 
-/// Build the Tantivy schema for sakuin.
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
 
@@ -38,20 +36,13 @@ pub fn build_schema() -> Schema {
 
     builder.add_text_field(FIELD_EXTENSION, STRING | STORED);
 
-    // Full file body — tokenized with the built-in "simple" tokenizer (splits on
-    // non-alphanumeric chars, lowercases). This preserves camelCase identifiers
-    // as single tokens (e.g. `addToLastViewedProducts` → one token) so that a
-    // regex like `.*addtolastviewedproducts.*` actually matches. Sub-word searches
-    // (e.g. `last` inside `addToLastViewedProducts`) still work because our regex
-    // query uses `.*last.*` which matches the full token as a substring.
-    // NOT stored (too large to keep in the document store).
+    // Body is not stored (too large); indexed with the default tokenizer for candidate retrieval.
     let body_indexing = TextFieldIndexing::default()
-        .set_tokenizer("default") // built-in: SimpleTokenizer + RemoveLongFilter + LowerCaser
+        .set_tokenizer("default")
         .set_index_option(IndexRecordOption::WithFreqsAndPositions);
     let body_options = TextOptions::default().set_indexing_options(body_indexing);
     builder.add_text_field(FIELD_BODY, body_options);
 
-    // Last modified time (unix timestamp) — for staleness detection
     builder.add_u64_field(FIELD_MODIFIED, STORED | FAST);
 
     builder.add_u64_field(FIELD_SIZE, STORED | FAST);
@@ -59,17 +50,9 @@ pub fn build_schema() -> Schema {
     builder.build()
 }
 
-/// Bump this constant whenever the schema or tokenizer configuration changes.
-/// If the stored marker doesn't match, the index directory is wiped and rebuilt
-/// from scratch (Tantivy's `open_or_create` silently reuses the old schema from
-/// `meta.json`, so we need our own version gate).
+// Bump when schema/tokenizer changes; mismatches trigger a full index wipe+rebuild.
 const SCHEMA_VERSION: &str = "v3";
 
-/// Open or create a Tantivy index at the given directory.
-///
-/// If the schema version marker is missing or stale the index directory is
-/// deleted and recreated, forcing a full rebuild on the next index operation.
-/// Registers the custom `code` tokenizer on the index.
 pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index_path = index_dir.join("index");
     let version_marker = index_dir.join("schema.ver");
@@ -90,8 +73,7 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     fs::create_dir_all(&index_path)
         .map_err(|e| format!("Failed to create index directory {:?}: {}", index_path, e))?;
 
-    // Remove a stale writer lock left by a previous crashed session.
-    // We are always the sole writer, so any lock present at startup is stale.
+    // Any writer lock at startup is stale — we are always the sole writer.
     let lock_path = index_path.join(".tantivy-writer.lock");
     if lock_path.exists() {
         log::info!("Removing stale writer lock: {:?}", lock_path);
@@ -119,15 +101,12 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     Ok(index)
 }
 
-/// Create an IndexWriter with a reasonable memory budget.
 pub fn create_writer(index: &Index) -> Result<IndexWriter, String> {
-    // 50 MB heap for the writer — enough for most projects
     index
         .writer(50_000_000)
         .map_err(|e| format!("Failed to create IndexWriter: {}", e))
 }
 
-/// Create an IndexReader that auto-reloads on commit.
 pub fn create_reader(index: &Index) -> Result<IndexReader, String> {
     index
         .reader_builder()
@@ -136,9 +115,7 @@ pub fn create_reader(index: &Index) -> Result<IndexReader, String> {
         .map_err(|e| format!("Failed to create IndexReader: {}", e))
 }
 
-/// Add a single file to the index.
-///
-/// If the file is already indexed, the caller should delete the old document first.
+/// Caller must delete any existing document for this path before calling.
 pub fn index_file(
     writer: &IndexWriter,
     schema: &Schema,
@@ -199,20 +176,12 @@ pub fn index_file(
     Ok(())
 }
 
-/// Delete a document from the index by its relative path.
-///
-/// Uses the untokenized `path_exact` field for exact matching.
 pub fn delete_by_path(writer: &IndexWriter, schema: &Schema, relative_path: &str) {
     let path_exact_field = schema.get_field(FIELD_PATH_EXACT).unwrap();
     let term = tantivy::Term::from_field_text(path_exact_field, relative_path);
     writer.delete_term(term);
 }
 
-/// Collect all indexed paths and their stored mtimes in a single segment-level scan.
-///
-/// This replaces the previous two-step pattern of `all_indexed_paths` + per-file
-/// `get_stored_mtime`, which ran N+1 separate index queries. Here we walk every
-/// segment reader directly — no query engine, no scoring, O(n_docs) total work.
 pub fn all_indexed_mtimes(
     reader: &IndexReader,
     schema: &Schema,
@@ -250,7 +219,6 @@ pub fn all_indexed_mtimes(
     map
 }
 
-/// Compute index statistics.
 pub fn compute_stats(index: &Index, reader: &IndexReader, project_root: &Path) -> IndexStats {
     let searcher = reader.searcher();
     let num_docs = searcher.num_docs();
@@ -260,7 +228,6 @@ pub fn compute_stats(index: &Index, reader: &IndexReader, project_root: &Path) -
     let index_size_bytes: u64 = index_path
         .iter()
         .filter_map(|p| {
-            // The managed files are relative to the index directory
             fs::metadata(project_root.join(".sakuin").join("index").join(p))
                 .ok()
                 .map(|m| m.len())
