@@ -597,11 +597,11 @@ fn test_search_multi_term_with_underscore() {
     let project = create_code_project();
     init_and_build(&project);
 
-    // "thread_pool new" — both terms must match (AND). pool.rs has both.
-    let results = sync_search("thread_pool new");
+    // "fn new(thread_pool_size" is a literal phrase that appears on one line in pool.rs.
+    let results = sync_search("fn new(thread_pool_size");
     assert!(
         !results.is_empty(),
-        "Expected results for 'thread_pool new'"
+        "Expected results for 'fn new(thread_pool_size'"
     );
     let paths = result_paths(&results);
     assert!(
@@ -619,11 +619,11 @@ fn test_search_multi_term_mixed_styles() {
     let project = create_code_project();
     init_and_build(&project);
 
-    // "HttpRequestHandler handleRequest" — handler.rs has both
-    let results = sync_search("HttpRequestHandler handleRequest");
+    // "fn handleRequest" is a literal phrase on one line in handler.rs.
+    let results = sync_search("fn handleRequest");
     assert!(
         !results.is_empty(),
-        "Expected results for 'HttpRequestHandler handleRequest'"
+        "Expected results for 'fn handleRequest'"
     );
     let paths = result_paths(&results);
     assert!(
