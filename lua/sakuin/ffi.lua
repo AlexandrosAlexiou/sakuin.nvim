@@ -131,8 +131,8 @@ local function on_async_notification()
 				lua_search_callback("error", 0, nil, "Failed to decode search message: " .. tostring(msg))
 			end
 		elseif lua_search_callback then
-			local gen = msg.generation or 0
-			local msg_type = msg.type or "error"
+			local gen = msg.generation
+			local msg_type = msg.type
 
 			if msg_type == "batch" then
 				lua_search_callback("batch", gen, msg.results, nil, msg.total_so_far)
