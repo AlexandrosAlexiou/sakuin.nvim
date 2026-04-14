@@ -91,20 +91,20 @@ mod ffi_exports {
                 match state::build_index() {
                     Ok(count) => {
                         state::push_indexing_event(state::IndexingEvent {
+                            status: "done",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
                             done: count,
-                            status: "done",
                             error: None,
                             message: None,
                         });
                     }
                     Err(e) => {
-                        prog.status.store(3, std::sync::atomic::Ordering::SeqCst);
+                        prog.status.store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
                         ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
+                            status: "error",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
                             done: prog.done.load(std::sync::atomic::Ordering::Relaxed),
-                            status: "error",
                             error: Some(e),
                             message: None,
                         });
@@ -115,11 +115,6 @@ mod ffi_exports {
         })
     }
 
-    /// Spawn an incremental index update on a background thread.
-    ///
-    /// Returns immediately. Progress is available via `sakuin_get_progress`.
-    /// Completion/error is pushed via `uv_async_send` → `sakuin_indexing_take_event`.
-    /// Returns 0 if the background job was spawned, -1 on error.
     #[no_mangle]
     pub extern "C" fn sakuin_update_index_async() -> i32 {
         ffi::ffi_try(|| {
@@ -128,20 +123,20 @@ mod ffi_exports {
                 match state::update_index() {
                     Ok((added, updated, removed)) => {
                         state::push_indexing_event(state::IndexingEvent {
+                            status: "done",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
                             done: added + updated + removed,
-                            status: "done",
                             error: None,
                             message: None,
                         });
                     }
                     Err(e) => {
-                        prog.status.store(3, std::sync::atomic::Ordering::SeqCst);
+                        prog.status.store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
                         ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
+                            status: "error",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
                             done: prog.done.load(std::sync::atomic::Ordering::Relaxed),
-                            status: "error",
                             error: Some(e),
                             message: None,
                         });
@@ -152,66 +147,32 @@ mod ffi_exports {
         })
     }
 
-    /// Take the latest indexing completion event from the shared slot.
-    ///
-    /// Called from `on_async_notification` (the uv_async callback). Returns a JSON string:
-    /// ```json
-    /// {"status":"done","total":500,"done":500}
-    /// {"status":"error","total":500,"done":200,"error":"..."}
-    /// ```
     /// Returns NULL if no event is pending. Caller MUST free with `sakuin_free_string`.
     #[no_mangle]
     pub extern "C" fn sakuin_indexing_take_event() -> *const c_char {
         match state::indexing_take_event() {
-            Some(ev) => {
-                let mut json = format!(
-                    r#"{{"status":"{}","total":{},"done":{}"#,
-                    ev.status, ev.total, ev.done
-                );
-                if let Some(msg) = ev.message {
-                    json.push_str(&format!(r#","message":"{}""#, msg));
-                }
-                if let Some(err) = ev.error {
-                    let escaped = err
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('\n', "\\n");
-                    json.push_str(&format!(r#","error":"{}""#, escaped));
-                }
-                json.push('}');
-                ffi::string_to_c(json)
-            }
+            Some(ev) => match serde_json::to_string(&ev) {
+                Ok(json) => ffi::str_to_c(&json),
+                Err(_) => std::ptr::null(),
+            },
             None => std::ptr::null(),
         }
     }
 
-    /// Get the progress of the current async build/update operation.
-    ///
-    /// Returns a JSON string:
-    /// ```json
-    /// {"total":1000,"done":500,"status":"running"}
-    /// ```
-    ///
-    /// Status values: "idle", "running", "done", "error"
-    ///
     /// Returns NULL on error. Caller MUST free with `sakuin_free_string`.
     #[no_mangle]
     pub extern "C" fn sakuin_get_progress() -> *const c_char {
         let prog = state::progress();
         let total = prog.total.load(std::sync::atomic::Ordering::Relaxed);
         let done = prog.done.load(std::sync::atomic::Ordering::Relaxed);
-        let status_code = prog.status.load(std::sync::atomic::Ordering::SeqCst);
-        let status = match status_code {
-            1 => "running",
-            2 => "done",
-            3 => "error",
+        let status = match prog.status.load(std::sync::atomic::Ordering::SeqCst) {
+            state::PROGRESS_RUNNING => "running",
+            state::PROGRESS_DONE => "done",
+            state::PROGRESS_ERROR => "error",
             _ => "idle",
         };
-        let json = format!(
-            r#"{{"total":{},"done":{},"status":"{}"}}"#,
-            total, done, status
-        );
-        ffi::string_to_c(json)
+        let json = format!(r#"{{"total":{},"done":{},"status":"{}"}}"#, total, done, status);
+        ffi::str_to_c(&json)
     }
 
     /// Start the background filesystem watcher.
@@ -248,55 +209,21 @@ mod ffi_exports {
         state::register_async_notifier(handle_ptr, send_fn_ptr);
     }
 
-    /// Take the next search result message from the queue.
-    ///
-    /// Messages are one of:
-    /// - Batch: `{"type":"batch","generation":N,"results":[...],"total_so_far":M}`
-    /// - Done:  `{"type":"done","generation":N,"total":M}`
-    /// - Error: `{"type":"error","generation":N,"error":"..."}`
-    ///
     /// Returns NULL if the queue is empty. Caller MUST free with `sakuin_free_string`.
     #[no_mangle]
     pub extern "C" fn sakuin_search_take_result() -> *const c_char {
         match state::search_take_result() {
-            Some(msg) => {
-                let json = match msg {
-                    state::SearchResultMessage::Batch {
-                        generation,
-                        results_json,
-                        total_so_far,
-                    } => {
-                        format!(
-                            r#"{{"type":"batch","generation":{},"results":{},"total_so_far":{}}}"#,
-                            generation, results_json, total_so_far
-                        )
-                    }
-                    state::SearchResultMessage::Done { generation, total } => {
-                        format!(
-                            r#"{{"type":"done","generation":{},"total":{}}}"#,
-                            generation, total
-                        )
-                    }
-                    state::SearchResultMessage::Error { generation, error } => {
-                        let escaped = error
-                            .replace('\\', "\\\\")
-                            .replace('"', "\\\"")
-                            .replace('\n', "\\n");
-                        format!(
-                            r#"{{"type":"error","generation":{},"error":"{}"}}"#,
-                            generation, escaped
-                        )
-                    }
-                };
-                ffi::string_to_c(json)
-            }
+            Some(msg) => match serde_json::to_string(&msg) {
+                Ok(json) => ffi::str_to_c(&json),
+                Err(_) => std::ptr::null(),
+            },
             None => std::ptr::null(),
         }
     }
 
     /// Submit a search query to the persistent worker thread.
     ///
-    /// - `query`: the search query string (Tantivy query syntax)
+    /// - `query`: the search query string
     /// - `generation`: a monotonically-increasing counter from the Lua side.
     ///   The same value is echoed back in result messages so the Lua side can
     ///   discard stale results.
@@ -336,8 +263,6 @@ mod ffi_exports {
 
     /// Execute a full-text search query (synchronous — blocks the caller).
     ///
-    /// - `query`: the search query string (Tantivy query syntax).
-    ///
     /// Returns a JSON string of results.
     /// Returns NULL on error (retrieve message with `sakuin_last_error`).
     /// The caller MUST free the returned string with `sakuin_free_string`.
@@ -352,7 +277,7 @@ mod ffi_exports {
                 }
                 Ok(q) => match state::do_search(q) {
                     Ok(results) => match serde_json::to_string(&results) {
-                        Ok(json) => ffi::string_to_c(json),
+                        Ok(json) => ffi::str_to_c(&json),
                         Err(e) => {
                             ffi::set_last_error(format!("JSON serialization failed: {}", e));
                             std::ptr::null()
@@ -386,7 +311,7 @@ mod ffi_exports {
     pub extern "C" fn sakuin_stats() -> *const c_char {
         match state::stats() {
             Ok(stats) => match serde_json::to_string(&stats) {
-                Ok(json) => ffi::string_to_c(json),
+                Ok(json) => ffi::str_to_c(&json),
                 Err(e) => {
                     ffi::set_last_error(format!("JSON serialization failed: {}", e));
                     std::ptr::null()
@@ -406,7 +331,7 @@ mod ffi_exports {
     #[no_mangle]
     pub extern "C" fn sakuin_last_error() -> *const c_char {
         match ffi::take_last_error() {
-            Some(msg) => ffi::string_to_c(msg),
+            Some(msg) => ffi::str_to_c(&msg),
             None => std::ptr::null(),
         }
     }
