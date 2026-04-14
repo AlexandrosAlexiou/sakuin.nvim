@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use rayon::prelude::*;
+use serde::Serialize;
 use tantivy::schema::Schema;
 use tantivy::{Index, IndexReader, IndexWriter};
 
@@ -29,11 +30,13 @@ pub struct SakuinState {
 
 static STATE: OnceLock<Mutex<Option<SakuinState>>> = OnceLock::new();
 
-/// Progress counters shared between the indexing thread and the polling FFI call.
+pub const PROGRESS_RUNNING: u64 = 1;
+pub const PROGRESS_DONE: u64 = 2;
+pub const PROGRESS_ERROR: u64 = 3;
+
 pub struct Progress {
     pub total: AtomicU64,
     pub done: AtomicU64,
-    /// 0 = not running, 1 = running, 2 = finished ok, 3 = finished with error
     pub status: AtomicU64,
 }
 
@@ -201,7 +204,7 @@ pub fn build_index() -> Result<u64, String> {
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
     let prog = progress();
-    prog.status.store(1, Ordering::SeqCst);
+    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
     prog.done.store(0, Ordering::SeqCst);
     prog.total.store(0, Ordering::SeqCst);
 
@@ -282,7 +285,7 @@ pub fn build_index() -> Result<u64, String> {
         .reload()
         .map_err(|e| format!("Failed to reload reader: {}", e))?;
 
-    prog.status.store(2, Ordering::SeqCst);
+    prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
 
     log::info!(
         "Full index build complete: {} files indexed, {} errors",
@@ -298,7 +301,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
     let prog = progress();
-    prog.status.store(1, Ordering::SeqCst);
+    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
     prog.done.store(0, Ordering::SeqCst);
     prog.total.store(0, Ordering::SeqCst);
 
@@ -448,7 +451,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         .reload()
         .map_err(|e| format!("Failed to reload reader: {}", e))?;
 
-    prog.status.store(2, Ordering::SeqCst);
+    prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
 
     log::info!(
         "Incremental update: +{} added, ~{} updated, -{} removed",
@@ -496,14 +499,14 @@ pub fn do_search(query: &str) -> Result<Vec<SearchResult>, String> {
 // thread. This avoids the SEGV caused by calling a LuaJIT `ffi.cast` callback
 // from a non-Lua thread.
 
-/// A completed indexing event pushed to Lua via uv_async_send.
+#[derive(Serialize)]
 pub struct IndexingEvent {
+    pub status: &'static str,
     pub total: u64,
     pub done: u64,
-    /// "progress", "done", or "error"
-    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Optional phase description shown in the progress UI (e.g. "scanning files…").
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<&'static str>,
 }
 
@@ -525,21 +528,15 @@ pub fn push_indexing_event(event: IndexingEvent) {
     notify_main_thread();
 }
 
-/// A single message in the search result queue.
-///
-/// The worker pushes one `Batch` message per batch of results, and a final
-/// `Done` or `Error` message when the search completes.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum SearchResultMessage {
-    /// A batch of results. `total_so_far` is the cumulative count of results
-    /// emitted up to and including this batch.
     Batch {
         generation: u64,
-        results_json: String,
+        results: Vec<crate::types::SearchResult>,
         total_so_far: u64,
     },
-    /// The search completed successfully.
     Done { generation: u64, total: u64 },
-    /// The search failed with an error.
     Error { generation: u64, error: String },
 }
 
@@ -665,10 +662,7 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             latest = newer;
         }
 
-        {
-            search_result_queue().lock().clear();
-        }
-
+        search_result_queue().lock().clear();
         cancel_flag.store(false, Ordering::SeqCst);
 
         let generation = latest.generation;
@@ -688,22 +682,13 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                 cancelled: &cancel_flag,
             };
             search::search_streaming(&params, batch_size, limit, |batch| {
-                // Serialize this batch to JSON
-                let count = batch.len() as u64;
-                let cumulative = total_ref.fetch_add(count, Ordering::Relaxed) + count;
-                match serde_json::to_string(&batch) {
-                    Ok(json) => {
-                        search_result_queue().lock().push_back(SearchResultMessage::Batch {
-                            generation,
-                            results_json: json,
-                            total_so_far: cumulative,
-                        });
-                        notify_main_thread();
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to serialize batch: {}", e);
-                    }
-                }
+                let cumulative = total_ref.fetch_add(batch.len() as u64, Ordering::Relaxed) + batch.len() as u64;
+                search_result_queue().lock().push_back(SearchResultMessage::Batch {
+                    generation,
+                    results: batch,
+                    total_so_far: cumulative,
+                });
+                notify_main_thread();
             })
         }));
 
