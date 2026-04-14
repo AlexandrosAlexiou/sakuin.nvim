@@ -1,17 +1,8 @@
-# sakuin.nvim
+# sakuin.nvim (索引)
 
-Indexed full-text search for Neovim. Powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
+Full-text search for Neovim built for large codebases. Powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
 
-Builds a persistent full-text index of your project and searches it instantly
-via a [snacks.nvim](https://github.com/folke/snacks.nvim) picker.
-
-## Features
-
-- **Tantivy-powered index**: persistent, incremental, fast to build and fast to query
-- **Streaming results**: results appear as you type, delivered in batches from a background thread
-- **File watcher**: index stays up to date automatically via filesystem events
-- **Snacks picker**: integrates with snacks.nvim's picker for a familiar UI
-- **Respects .gitignore**: skips ignored files, node_modules, build artifacts, etc.
+A fast, indexed alternative to live grep for large codebases. Builds a persistent full-text index so queries return in milliseconds across 100,000+ files, streamed into a [snacks.nvim](https://github.com/folke/snacks.nvim) picker as you type.
 
 ## Requirements
 
@@ -33,9 +24,23 @@ via a [snacks.nvim](https://github.com/folke/snacks.nvim) picker.
 }
 ```
 
+## Getting Started
+
+1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written to `.sakuin/` at your project root — add it to your `.gitignore`.
+2. Open the search picker with `<leader>si` and start typing. Results stream in as you type.
+3. From that point on, the index is maintained automatically. On startup, changed files are synced. A filesystem watcher keeps it current while you work.
+
+## Features
+
+- **Instant queries at any scale**: the index is built once and queried from disk, so search speed does not depend on project size
+- **Streaming results**: results appear as you type, delivered in batches from a background thread
+- **Incremental indexing**: only changed files are re-indexed on startup, keeping sync fast even on large projects
+- **Live index updates**: a filesystem watcher re-indexes files as you save, with no manual intervention
+- **Respects `.gitignore`**: ignored files, build artifacts, lockfiles, and `node_modules` are skipped automatically
+
 ## Configuration
 
-Default configuration — all values are optional:
+All values are optional:
 
 ```lua
 require("sakuin").setup({
@@ -54,7 +59,7 @@ require("sakuin").setup({
     "*.min.js", "*.map", "package-lock.json", "yarn.lock",
   },
 
-  -- File extensions to include (nil = all text files)
+  -- File extensions to index (nil = all text files detected by content)
   include_extensions = nil,
 
   -- Respect .gitignore / .ignore files
@@ -90,14 +95,12 @@ require("sakuin").setup({
 | `:SakuinUpdate` | Incremental index update |
 | `:SakuinStats` | Show index statistics |
 
-## How It Works
+## Keymaps
 
-1. Run `:SakuinBuild` to create the index for the first time — this builds a Tantivy index in `.sakuin/` at your project root
-2. On subsequent startups, `setup()` detects the existing `.sakuin/` directory and automatically syncs it (new/changed files indexed, deleted files removed)
-3. A filesystem watcher keeps the index current as you edit
-4. When you open the picker, your query goes to a persistent Rust search thread that streams results back via `uv_async_send`
-
-The index is stored on disk and reused across sessions. Only changed files are re-indexed on startup.
+| Key | Description |
+| --- | --- |
+| `<leader>si` | Open search picker |
+| `<leader>sW` | Search word under cursor or visual selection |
 
 ## Health Check
 
