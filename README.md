@@ -17,7 +17,7 @@ A fast, indexed alternative to live grep for large codebases. Builds a persisten
 
 ```lua
 {
-  "alexiou/sakuin.nvim",
+  "AlexandrosAlexiou/sakuin.nvim",
   build = function() require("sakuin.install").ensure_binary() end,
   dependencies = { "folke/snacks.nvim" },
   opts = {},
