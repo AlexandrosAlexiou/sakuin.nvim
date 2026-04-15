@@ -2,7 +2,7 @@
 
 Full-text search for Neovim built for large codebases. Powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
 
-A fast, indexed alternative to live grep for large codebases. Builds a persistent full-text index so queries return in milliseconds across 100,000+ files, streamed into a [snacks.nvim](https://github.com/folke/snacks.nvim) picker as you type.
+A fast, indexed alternative to live grep for large codebases. Builds a persistent full-text index so queries return in milliseconds across 100,000+ files, streamed into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
 
 ## Requirements
 
