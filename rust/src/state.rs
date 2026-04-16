@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::Serialize;
 use tantivy::schema::Schema;
-use tantivy::{Index, IndexReader, IndexWriter};
+use tantivy::{Executor, Index, IndexReader, IndexWriter};
 
 use crate::index;
 use crate::search;
@@ -656,6 +656,12 @@ fn notify_main_thread() {
 
 /// The main loop of the persistent search worker thread.
 fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<AtomicBool>) {
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
+        .unwrap_or_else(|_| Executor::single_thread());
+
     loop {
         let request = match rx.recv() {
             Ok(req) => req,
@@ -686,6 +692,7 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                 project_root: &latest.project_root,
                 query_str: &latest.query,
                 cancelled: &cancel_flag,
+                executor: &executor,
             };
             search::search_streaming(&params, batch_size, limit, |batch| {
                 let cumulative =
