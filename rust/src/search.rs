@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use tantivy::collector::TopDocs;
+use tantivy::query::EnableScoring;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, RegexQuery};
 use tantivy::schema::{Schema, Value};
-use tantivy::{IndexReader, TantivyDocument};
+use tantivy::{Executor, IndexReader, TantivyDocument};
 
 use crate::index::{FIELD_BODY, FIELD_FILENAME, FIELD_PATH};
 use crate::types::SearchResult;
@@ -18,6 +19,7 @@ pub struct SearchParams<'a> {
     pub project_root: &'a Path,
     pub query_str: &'a str,
     pub cancelled: &'a Arc<AtomicBool>,
+    pub executor: &'a Executor,
 }
 
 pub fn search(
@@ -27,12 +29,18 @@ pub fn search(
     query_str: &str,
     cancelled: &Arc<AtomicBool>,
 ) -> Result<Vec<SearchResult>, String> {
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
+        .unwrap_or_else(|_| Executor::single_thread());
     let params = SearchParams {
         reader,
         schema,
         project_root,
         query_str,
         cancelled,
+        executor: &executor,
     };
     let mut all_results = Vec::new();
     search_streaming(&params, usize::MAX, usize::MAX, |batch| {
@@ -102,9 +110,11 @@ where
         return Ok(());
     }
     let top_docs = searcher
-        .search(
+        .search_with_executor(
             &tantivy_query,
             &TopDocs::with_limit(num_docs).order_by_score(),
+            params.executor,
+            EnableScoring::enabled_from_statistics_provider(&searcher, &searcher),
         )
         .map_err(|e| format!("Search failed: {}", e))?;
 
