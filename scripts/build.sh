@@ -6,8 +6,6 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RUST_DIR="$PROJECT_ROOT/rust"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-echo "Building sakuin native library..."
-
 # Detect platform
 case "$(uname -s)" in
 Linux) LIB_NAME="libsakuin.so" ;;
@@ -19,22 +17,46 @@ MINGW* | MSYS* | CYGWIN*) LIB_NAME="sakuin.dll" ;;
 	;;
 esac
 
-# Build release (library + CLI binary)
-cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --lib --bin sakuin-cli
+TARGET="${1:-all}"
 
-# Copy to build/
-mkdir -p "$BUILD_DIR"
-cp "$RUST_DIR/target/release/$LIB_NAME" "$BUILD_DIR/"
-cp "$RUST_DIR/target/release/sakuin-cli" "$BUILD_DIR/"
+build_lib() {
+	echo "Building sakuin native library..."
+	cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --lib
 
-# On macOS, ad-hoc re-sign so the kernel accepts the new binary.
-# Without this, replacing a previously-loaded dylib triggers a code-signing
-# mtime mismatch and macOS sends SIGKILL on the next dlopen.
-if [ "$(uname -s)" = "Darwin" ]; then
-	codesign -s - -f "$BUILD_DIR/$LIB_NAME" 2>/dev/null || true
-fi
+	mkdir -p "$BUILD_DIR"
+	cp "$RUST_DIR/target/release/$LIB_NAME" "$BUILD_DIR/"
 
-echo "Built $BUILD_DIR/$LIB_NAME"
-ls -lh "$BUILD_DIR/$LIB_NAME"
-echo "Built $BUILD_DIR/sakuin-cli"
-ls -lh "$BUILD_DIR/sakuin-cli"
+	# On macOS, ad-hoc re-sign so the kernel accepts the new binary.
+	# Without this, replacing a previously-loaded dylib triggers a code-signing
+	# mtime mismatch and macOS sends SIGKILL on the next dlopen.
+	if [ "$(uname -s)" = "Darwin" ]; then
+		codesign -s - -f "$BUILD_DIR/$LIB_NAME" 2>/dev/null || true
+	fi
+
+	echo "Built $BUILD_DIR/$LIB_NAME"
+	ls -lh "$BUILD_DIR/$LIB_NAME"
+}
+
+build_cli() {
+	echo "Building sakuin-cli..."
+	cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --bin sakuin-cli
+
+	mkdir -p "$BUILD_DIR"
+	cp "$RUST_DIR/target/release/sakuin-cli" "$BUILD_DIR/"
+
+	echo "Built $BUILD_DIR/sakuin-cli"
+	ls -lh "$BUILD_DIR/sakuin-cli"
+}
+
+case "$TARGET" in
+lib) build_lib ;;
+cli) build_cli ;;
+all)
+	build_lib
+	build_cli
+	;;
+*)
+	echo "Usage: $0 [lib|cli|all]"
+	exit 1
+	;;
+esac
