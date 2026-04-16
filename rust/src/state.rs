@@ -203,11 +203,10 @@ fn add_prepared_doc(writer: &IndexWriter, schema: &Schema, doc: PreparedDoc) -> 
 /// Walks the project directory, clears the existing index, and re-indexes
 /// all matching files.
 ///
-/// Pipeline: a reader thread runs rayon to read files in parallel and sends
-/// prepared docs through a bounded channel. The current thread (which holds
-/// the IndexWriter) drains the channel and writes docs concurrently, so
-/// reading and writing fully overlap instead of running in two sequential
-/// phases.
+/// Rayon tasks read files AND call add_document directly with a brief
+/// per-call lock on the IndexWriter. add_document is just a crossbeam
+/// channel send (~100ns) so contention is negligible. Tantivy's internal
+/// worker threads handle tokenization and segment writing in parallel.
 pub fn build_index() -> Result<u64, String> {
     CANCEL_INDEXING.store(false, Ordering::SeqCst);
 
@@ -242,72 +241,67 @@ pub fn build_index() -> Result<u64, String> {
     });
     notify_main_thread();
 
-    let mut writer_guard = writer.lock();
-    writer_guard
-        .delete_all_documents()
-        .map_err(|e| format!("Failed to clear index: {}", e))?;
-
-    // Bounded channel: backpressure keeps memory usage proportional to the
-    // channel capacity regardless of project size.
-    let (doc_tx, doc_rx) = std::sync::mpsc::sync_channel::<Result<PreparedDoc, String>>(512);
-
-    let project_root_for_reader = project_root.clone();
-    let done_counter = Arc::new(AtomicU64::new(0));
-    let done_ref = done_counter.clone();
-
-    let reader_thread = std::thread::spawn(move || {
-        files.par_iter().for_each(|file_path| {
-            let result = prepare_doc(&project_root_for_reader, file_path);
-            let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
-            prog.done.store(count, Ordering::Relaxed);
-            if count.is_multiple_of(100) {
-                let total = prog.total.load(Ordering::Relaxed);
-                *indexing_event_slot().lock() = Some(IndexingEvent {
-                    total,
-                    done: count,
-                    status: "progress",
-                    error: None,
-                    message: None,
-                });
-                notify_main_thread();
-            }
-            let payload = result.map_err(|e| {
-                log::warn!("Failed to read {:?}: {}", file_path, e);
-                e
-            });
-            let _ = doc_tx.send(payload);
-        });
-        // doc_tx dropped here — closes the channel and unblocks the writer loop.
-    });
-
-    let mut indexed_count: u64 = 0;
-    let mut error_count: u64 = 0;
-    for result in doc_rx {
-        // doc_rx is moved into the for loop; breaking drops it, which causes
-        // the reader thread's pending sends to fail and lets it finish quickly.
-        if CANCEL_INDEXING.load(Ordering::Relaxed) {
-            break;
-        }
-        match result {
-            Ok(doc) => match add_prepared_doc(&writer_guard, &schema, doc) {
-                Ok(()) => indexed_count += 1,
-                Err(e) => {
-                    log::warn!("Failed to index: {}", e);
-                    error_count += 1;
-                }
-            },
-            Err(_) => error_count += 1,
-        }
+    {
+        let writer_guard = writer.lock();
+        writer_guard
+            .delete_all_documents()
+            .map_err(|e| format!("Failed to clear index: {}", e))?;
     }
 
-    reader_thread
-        .join()
-        .map_err(|_| "Reader thread panicked during index build".to_string())?;
+    // Rayon tasks read files AND call add_document directly. add_document is
+    // just a crossbeam channel send (~100ns), so per-call locking on the
+    // Arc<Mutex<IndexWriter>> has negligible contention.
+    let indexed_count = Arc::new(AtomicU64::new(0));
+    let error_count = Arc::new(AtomicU64::new(0));
+    let done_counter = Arc::new(AtomicU64::new(0));
+
+    files.par_iter().for_each(|file_path| {
+        if CANCEL_INDEXING.load(Ordering::Relaxed) {
+            return;
+        }
+        let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        prog.done.store(count, Ordering::Relaxed);
+        if count.is_multiple_of(100) {
+            let total = prog.total.load(Ordering::Relaxed);
+            *indexing_event_slot().lock() = Some(IndexingEvent {
+                total,
+                done: count,
+                status: "progress",
+                error: None,
+                message: None,
+            });
+            notify_main_thread();
+        }
+        match prepare_doc(&project_root, file_path) {
+            Ok(doc) => {
+                let writer_guard = writer.lock();
+                match add_prepared_doc(&writer_guard, &schema, doc) {
+                    Ok(()) => {
+                        indexed_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to index: {}", e);
+                        error_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read {:?}: {}", file_path, e);
+                error_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+
+    let indexed_count = indexed_count.load(Ordering::Relaxed);
+    let error_count = error_count.load(Ordering::Relaxed);
 
     // Commit even on cancellation so partial progress is not lost.
-    writer_guard
-        .commit()
-        .map_err(|e| format!("Failed to commit: {}", e))?;
+    {
+        let mut writer_guard = writer.lock();
+        writer_guard
+            .commit()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+    }
     // Reload so the partial or complete results are visible in this session.
     let _ = reader.reload();
 
@@ -365,8 +359,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     notify_main_thread();
     let indexed_mtimes = index::all_indexed_mtimes(&reader, &schema);
 
-    let mut writer_guard = writer.lock();
-
     let disk_set: HashSet<String> = files_on_disk
         .iter()
         .filter_map(|p| {
@@ -377,10 +369,13 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         .collect();
 
     let mut removed: u64 = 0;
-    for indexed_path in indexed_mtimes.keys() {
-        if !disk_set.contains(indexed_path) {
-            index::delete_by_path(&writer_guard, &schema, indexed_path);
-            removed += 1;
+    {
+        let writer_guard = writer.lock();
+        for indexed_path in indexed_mtimes.keys() {
+            if !disk_set.contains(indexed_path) {
+                index::delete_by_path(&writer_guard, &schema, indexed_path);
+                removed += 1;
+            }
         }
     }
 
@@ -420,78 +415,72 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     });
     notify_main_thread();
 
-    for (file_path, is_update) in &files_to_index {
-        if *is_update {
-            let rel_path = file_path
-                .strip_prefix(&project_root)
-                .unwrap_or(file_path)
-                .to_string_lossy()
-                .to_string();
-            index::delete_by_path(&writer_guard, &schema, &rel_path);
+    {
+        let writer_guard = writer.lock();
+        for (file_path, is_update) in &files_to_index {
+            if *is_update {
+                let rel_path = file_path
+                    .strip_prefix(&project_root)
+                    .unwrap_or(file_path)
+                    .to_string_lossy()
+                    .to_string();
+                index::delete_by_path(&writer_guard, &schema, &rel_path);
+            }
         }
     }
 
-    // Pipeline: same read-write overlap as build_index.
-    let (doc_tx, doc_rx) =
-        std::sync::mpsc::sync_channel::<(Result<PreparedDoc, String>, bool)>(512);
-
-    let project_root_for_reader = project_root.clone();
+    // Rayon tasks read files AND call add_document directly with per-call locking.
+    let added = Arc::new(AtomicU64::new(0));
+    let updated = Arc::new(AtomicU64::new(0));
     let done_counter = Arc::new(AtomicU64::new(0));
-    let done_ref = done_counter.clone();
 
-    let reader_thread = std::thread::spawn(move || {
-        files_to_index
-            .par_iter()
-            .for_each(|(file_path, is_update)| {
-                let result = prepare_doc(&project_root_for_reader, file_path);
-                let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
-                prog.done.store(count, Ordering::Relaxed);
-                if count.is_multiple_of(100) {
-                    let total = prog.total.load(Ordering::Relaxed);
-                    *indexing_event_slot().lock() = Some(IndexingEvent {
-                        total,
-                        done: count,
-                        status: "progress",
-                        error: None,
-                        message: None,
-                    });
-                    notify_main_thread();
-                }
-                let _ = doc_tx.send((result, *is_update));
-            });
-    });
-
-    let mut added: u64 = 0;
-    let mut updated: u64 = 0;
-    for (result, is_update) in doc_rx {
-        // doc_rx is moved into the for loop; breaking drops it, which causes
-        // the reader thread's pending sends to fail and lets it finish quickly.
-        if CANCEL_INDEXING.load(Ordering::Relaxed) {
-            break;
-        }
-        match result {
-            Ok(doc) => match add_prepared_doc(&writer_guard, &schema, doc) {
-                Ok(()) => {
-                    if is_update {
-                        updated += 1;
-                    } else {
-                        added += 1;
+    files_to_index
+        .par_iter()
+        .for_each(|(file_path, is_update)| {
+            if CANCEL_INDEXING.load(Ordering::Relaxed) {
+                return;
+            }
+            let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            prog.done.store(count, Ordering::Relaxed);
+            if count.is_multiple_of(100) {
+                let total = prog.total.load(Ordering::Relaxed);
+                *indexing_event_slot().lock() = Some(IndexingEvent {
+                    total,
+                    done: count,
+                    status: "progress",
+                    error: None,
+                    message: None,
+                });
+                notify_main_thread();
+            }
+            match prepare_doc(&project_root, file_path) {
+                Ok(doc) => {
+                    let writer_guard = writer.lock();
+                    match add_prepared_doc(&writer_guard, &schema, doc) {
+                        Ok(()) => {
+                            if *is_update {
+                                updated.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                added.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Err(e) => log::warn!("Failed to index: {}", e),
                     }
                 }
-                Err(e) => log::warn!("Failed to index: {}", e),
-            },
-            Err(e) => log::warn!("Failed to read file: {}", e),
-        }
-    }
+                Err(e) => log::warn!("Failed to read file: {}", e),
+            }
+        });
 
-    reader_thread
-        .join()
-        .map_err(|_| "Reader thread panicked during index update".to_string())?;
+    let added = added.load(Ordering::Relaxed);
+    let updated = updated.load(Ordering::Relaxed);
 
     // Commit even on cancellation so partial progress is not lost.
-    writer_guard
-        .commit()
-        .map_err(|e| format!("Failed to commit: {}", e))?;
+    {
+        let mut writer_guard = writer.lock();
+        writer_guard
+            .commit()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+    }
     // Reload so the partial or complete results are visible in this session.
     let _ = reader.reload();
 
