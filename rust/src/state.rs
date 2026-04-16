@@ -23,7 +23,7 @@ pub struct SakuinState {
     pub index: Index,
     pub schema: Schema,
     pub reader: IndexReader,
-    pub writer: Mutex<IndexWriter>,
+    pub writer: Arc<Mutex<IndexWriter>>,
     pub config: SakuinConfig,
     pub watcher_handle: Mutex<Option<watcher::WatcherHandle>>,
 }
@@ -41,6 +41,10 @@ pub struct Progress {
 }
 
 static PROGRESS: OnceLock<Progress> = OnceLock::new();
+
+/// Set to true by shutdown() to ask any in-flight index build/update to stop
+/// and commit whatever progress it has made so far.
+static CANCEL_INDEXING: AtomicBool = AtomicBool::new(false);
 
 pub fn progress() -> &'static Progress {
     PROGRESS.get_or_init(|| Progress {
@@ -76,7 +80,7 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
         index,
         schema,
         reader,
-        writer: Mutex::new(writer),
+        writer: Arc::new(Mutex::new(writer)),
         config,
         watcher_handle: Mutex::new(None),
     };
@@ -90,6 +94,11 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
 
 /// Shut down the engine: stop watcher, stop worker, commit pending writes, drop state.
 pub fn shutdown() {
+    // Tell any in-flight indexing to exit its loop and commit whatever it has
+    // done so far. Without this, shutdown() would block on global_state().lock()
+    // for the entire remaining duration of the index build/update.
+    CANCEL_INDEXING.store(true, Ordering::SeqCst);
+
     search_worker_shutdown();
 
     let mut guard = global_state().lock();
@@ -200,15 +209,28 @@ fn add_prepared_doc(writer: &IndexWriter, schema: &Schema, doc: PreparedDoc) -> 
 /// reading and writing fully overlap instead of running in two sequential
 /// phases.
 pub fn build_index() -> Result<u64, String> {
-    let guard = global_state().lock();
-    let state = guard.as_ref().ok_or("sakuin not initialized")?;
+    CANCEL_INDEXING.store(false, Ordering::SeqCst);
 
     let prog = progress();
     prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
     prog.done.store(0, Ordering::SeqCst);
     prog.total.store(0, Ordering::SeqCst);
 
-    let files = walker::walk_project(&state.project_root, &state.config);
+    // Briefly hold the global lock to clone what we need, then release it so
+    // shutdown() is never blocked for the entire duration of indexing.
+    let (project_root, schema, writer, config, reader) = {
+        let guard = global_state().lock();
+        let state = guard.as_ref().ok_or("sakuin not initialized")?;
+        (
+            state.project_root.clone(),
+            state.schema.clone(),
+            Arc::clone(&state.writer),
+            state.config.clone(),
+            state.reader.clone(),
+        )
+    };
+
+    let files = walker::walk_project(&project_root, &config);
     let total_files = files.len() as u64;
     prog.total.store(total_files, Ordering::SeqCst);
     *indexing_event_slot().lock() = Some(IndexingEvent {
@@ -220,8 +242,8 @@ pub fn build_index() -> Result<u64, String> {
     });
     notify_main_thread();
 
-    let mut writer = state.writer.lock();
-    writer
+    let mut writer_guard = writer.lock();
+    writer_guard
         .delete_all_documents()
         .map_err(|e| format!("Failed to clear index: {}", e))?;
 
@@ -229,13 +251,13 @@ pub fn build_index() -> Result<u64, String> {
     // channel capacity regardless of project size.
     let (doc_tx, doc_rx) = std::sync::mpsc::sync_channel::<Result<PreparedDoc, String>>(512);
 
-    let project_root = state.project_root.clone();
+    let project_root_for_reader = project_root.clone();
     let done_counter = Arc::new(AtomicU64::new(0));
     let done_ref = done_counter.clone();
 
-    let reader = std::thread::spawn(move || {
+    let reader_thread = std::thread::spawn(move || {
         files.par_iter().for_each(|file_path| {
-            let result = prepare_doc(&project_root, file_path);
+            let result = prepare_doc(&project_root_for_reader, file_path);
             let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
             prog.done.store(count, Ordering::Relaxed);
             if count.is_multiple_of(100) {
@@ -261,8 +283,13 @@ pub fn build_index() -> Result<u64, String> {
     let mut indexed_count: u64 = 0;
     let mut error_count: u64 = 0;
     for result in doc_rx {
+        // doc_rx is moved into the for loop; breaking drops it, which causes
+        // the reader thread's pending sends to fail and lets it finish quickly.
+        if CANCEL_INDEXING.load(Ordering::Relaxed) {
+            break;
+        }
         match result {
-            Ok(doc) => match add_prepared_doc(&writer, &state.schema, doc) {
+            Ok(doc) => match add_prepared_doc(&writer_guard, &schema, doc) {
                 Ok(()) => indexed_count += 1,
                 Err(e) => {
                     log::warn!("Failed to index: {}", e);
@@ -273,17 +300,16 @@ pub fn build_index() -> Result<u64, String> {
         }
     }
 
-    reader
+    reader_thread
         .join()
         .map_err(|_| "Reader thread panicked during index build".to_string())?;
 
-    writer
+    // Commit even on cancellation so partial progress is not lost.
+    writer_guard
         .commit()
         .map_err(|e| format!("Failed to commit: {}", e))?;
-    state
-        .reader
-        .reload()
-        .map_err(|e| format!("Failed to reload reader: {}", e))?;
+    // Reload so the partial or complete results are visible in this session.
+    let _ = reader.reload();
 
     prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
 
@@ -297,8 +323,7 @@ pub fn build_index() -> Result<u64, String> {
 }
 
 pub fn update_index() -> Result<(u64, u64, u64), String> {
-    let guard = global_state().lock();
-    let state = guard.as_ref().ok_or("sakuin not initialized")?;
+    CANCEL_INDEXING.store(false, Ordering::SeqCst);
 
     let prog = progress();
     prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
@@ -313,7 +338,22 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         message: Some("scanning files…"),
     });
     notify_main_thread();
-    let files_on_disk = walker::walk_project(&state.project_root, &state.config);
+
+    // Briefly hold the global lock to clone what we need, then release it so
+    // shutdown() is never blocked for the entire duration of indexing.
+    let (project_root, schema, writer, config, reader) = {
+        let guard = global_state().lock();
+        let state = guard.as_ref().ok_or("sakuin not initialized")?;
+        (
+            state.project_root.clone(),
+            state.schema.clone(),
+            Arc::clone(&state.writer),
+            state.config.clone(),
+            state.reader.clone(),
+        )
+    };
+
+    let files_on_disk = walker::walk_project(&project_root, &config);
 
     *indexing_event_slot().lock() = Some(IndexingEvent {
         total: 0,
@@ -323,14 +363,14 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         message: Some("checking index…"),
     });
     notify_main_thread();
-    let indexed_mtimes = index::all_indexed_mtimes(&state.reader, &state.schema);
+    let indexed_mtimes = index::all_indexed_mtimes(&reader, &schema);
 
-    let mut writer = state.writer.lock();
+    let mut writer_guard = writer.lock();
 
     let disk_set: HashSet<String> = files_on_disk
         .iter()
         .filter_map(|p| {
-            p.strip_prefix(&state.project_root)
+            p.strip_prefix(&project_root)
                 .ok()
                 .map(|r| r.to_string_lossy().to_string())
         })
@@ -339,7 +379,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let mut removed: u64 = 0;
     for indexed_path in indexed_mtimes.keys() {
         if !disk_set.contains(indexed_path) {
-            index::delete_by_path(&writer, &state.schema, indexed_path);
+            index::delete_by_path(&writer_guard, &schema, indexed_path);
             removed += 1;
         }
     }
@@ -348,7 +388,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         .iter()
         .filter_map(|file_path| {
             let rel_path = file_path
-                .strip_prefix(&state.project_root)
+                .strip_prefix(&project_root)
                 .unwrap_or(file_path)
                 .to_string_lossy()
                 .to_string();
@@ -383,11 +423,11 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     for (file_path, is_update) in &files_to_index {
         if *is_update {
             let rel_path = file_path
-                .strip_prefix(&state.project_root)
+                .strip_prefix(&project_root)
                 .unwrap_or(file_path)
                 .to_string_lossy()
                 .to_string();
-            index::delete_by_path(&writer, &state.schema, &rel_path);
+            index::delete_by_path(&writer_guard, &schema, &rel_path);
         }
     }
 
@@ -395,15 +435,15 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let (doc_tx, doc_rx) =
         std::sync::mpsc::sync_channel::<(Result<PreparedDoc, String>, bool)>(512);
 
-    let project_root = state.project_root.clone();
+    let project_root_for_reader = project_root.clone();
     let done_counter = Arc::new(AtomicU64::new(0));
     let done_ref = done_counter.clone();
 
-    let reader = std::thread::spawn(move || {
+    let reader_thread = std::thread::spawn(move || {
         files_to_index
             .par_iter()
             .for_each(|(file_path, is_update)| {
-                let result = prepare_doc(&project_root, file_path);
+                let result = prepare_doc(&project_root_for_reader, file_path);
                 let count = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
                 prog.done.store(count, Ordering::Relaxed);
                 if count.is_multiple_of(100) {
@@ -424,8 +464,13 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let mut added: u64 = 0;
     let mut updated: u64 = 0;
     for (result, is_update) in doc_rx {
+        // doc_rx is moved into the for loop; breaking drops it, which causes
+        // the reader thread's pending sends to fail and lets it finish quickly.
+        if CANCEL_INDEXING.load(Ordering::Relaxed) {
+            break;
+        }
         match result {
-            Ok(doc) => match add_prepared_doc(&writer, &state.schema, doc) {
+            Ok(doc) => match add_prepared_doc(&writer_guard, &schema, doc) {
                 Ok(()) => {
                     if is_update {
                         updated += 1;
@@ -439,17 +484,16 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         }
     }
 
-    reader
+    reader_thread
         .join()
         .map_err(|_| "Reader thread panicked during index update".to_string())?;
 
-    writer
+    // Commit even on cancellation so partial progress is not lost.
+    writer_guard
         .commit()
         .map_err(|e| format!("Failed to commit: {}", e))?;
-    state
-        .reader
-        .reload()
-        .map_err(|e| format!("Failed to reload reader: {}", e))?;
+    // Reload so the partial or complete results are visible in this session.
+    let _ = reader.reload();
 
     prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
 
