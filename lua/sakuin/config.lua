@@ -24,8 +24,6 @@ M.defaults = {
   respect_gitignore = true,
 
   search = {
-    -- Smaller = faster time-to-first-result, larger = fewer picker refreshes.
-    batch_size = 500,
     -- 0 = unlimited. Stops search early once enough results exist.
     limit = 10000,
   },

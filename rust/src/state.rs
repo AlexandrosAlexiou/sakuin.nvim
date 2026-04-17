@@ -636,7 +636,6 @@ struct SearchRequest {
     reader: IndexReader,
     schema: Schema,
     project_root: PathBuf,
-    batch_size: usize,
     limit: usize,
 }
 
@@ -711,7 +710,6 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
         cancel_flag.store(false, Ordering::SeqCst);
 
         let generation = latest.generation;
-        let batch_size = latest.batch_size;
         let limit = latest.limit;
 
         let total_so_far = Arc::new(AtomicU64::new(0));
@@ -727,7 +725,7 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
                 cancelled: &cancel_flag,
                 executor: &executor,
             };
-            search::search_streaming(&params, batch_size, limit, |batch| {
+            search::search_streaming(&params, limit, |batch| {
                 let cumulative =
                     total_ref.fetch_add(batch.len() as u64, Ordering::Relaxed) + batch.len() as u64;
                 search_result_queue()
@@ -779,12 +777,7 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
 /// The worker will push result batches + a terminal message to the queue
 /// and notify via uv_async_send for each.
 /// Any in-flight search is automatically cancelled.
-pub fn search_submit(
-    query: &str,
-    generation: u64,
-    batch_size: usize,
-    limit: usize,
-) -> Result<(), String> {
+pub fn search_submit(query: &str, generation: u64, limit: usize) -> Result<(), String> {
     ensure_worker();
 
     let guard = global_state().lock();
@@ -806,7 +799,6 @@ pub fn search_submit(
         reader,
         schema,
         project_root,
-        batch_size,
         limit,
     };
 

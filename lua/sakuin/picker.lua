@@ -18,7 +18,6 @@ function M.sakuin(opts)
 	opts = opts or {}
 	local config = sakuin_config.get()
 	local search_config = config.search or {}
-	local batch_size = search_config.batch_size or 500
 	local search_limit = search_config.limit or 10000
 
 	-- Generation counter: incremented on every new search to discard stale results
@@ -75,7 +74,7 @@ function M.sakuin(opts)
 				end
 			end)
 
-			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, batch_size, search_limit)
+			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
 			if rc ~= 0 then
 				if submit_err then
 					vim.schedule(function()

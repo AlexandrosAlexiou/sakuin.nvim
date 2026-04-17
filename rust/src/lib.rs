@@ -232,7 +232,6 @@ mod ffi_exports {
     /// - `generation`: a monotonically-increasing counter from the Lua side.
     ///   The same value is echoed back in result messages so the Lua side can
     ///   discard stale results.
-    /// - `batch_size`: number of results per batch (0 = default 500)
     /// - `limit`: maximum total results (0 = unlimited)
     ///
     /// Any in-flight search is automatically cancelled.
@@ -241,22 +240,16 @@ mod ffi_exports {
     pub extern "C" fn sakuin_search_submit(
         query: *const c_char,
         generation: u64,
-        batch_size: u64,
         limit: u64,
     ) -> i32 {
         ffi::ffi_try(|| {
             let query_str = unsafe { ffi::cstr_to_str(query)? };
-            let bs = if batch_size == 0 {
-                500
-            } else {
-                batch_size as usize
-            };
             let lim = if limit == 0 {
                 usize::MAX
             } else {
                 limit as usize
             };
-            state::search_submit(query_str, generation, bs, lim)
+            state::search_submit(query_str, generation, lim)
         })
     }
 
