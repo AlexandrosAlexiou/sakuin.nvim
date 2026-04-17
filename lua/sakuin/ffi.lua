@@ -36,7 +36,7 @@ ffi.cdef([[
   /* Search — async with result queue + uv_async notification */
   void        sakuin_register_async_notifier(void* handle_ptr, void* send_fn_ptr);
   const char* sakuin_search_take_result(void);
-  int         sakuin_search_submit(const char* query, uint64_t generation, uint64_t batch_size, uint64_t limit);
+  int         sakuin_search_submit(const char* query, uint64_t generation, uint64_t limit);
   void        sakuin_search_cancel(void);
 
   /* Indexing completion event (pushed via uv_async_send, same channel as search) */
@@ -260,12 +260,11 @@ end
 --- Any in-flight search is automatically cancelled.
 ---@param query string The search query
 ---@param generation number Monotonically increasing generation counter
----@param batch_size? number Results per batch (0 or nil = default 500)
 ---@param limit? number Maximum total results (0 or nil = unlimited)
 ---@return number rc 0 on success, -1 on error
 ---@return string|nil error Error message on failure
-function M.search_submit(query, generation, batch_size, limit)
-	local rc = get_lib().sakuin_search_submit(query, generation, batch_size or 0, limit or 0)
+function M.search_submit(query, generation, limit)
+	local rc = get_lib().sakuin_search_submit(query, generation, limit or 0)
 	if tonumber(rc) ~= 0 then
 		return -1, M.last_error() or "search_submit failed"
 	end

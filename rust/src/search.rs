@@ -43,7 +43,7 @@ pub fn search(
         executor: &executor,
     };
     let mut all_results = Vec::new();
-    search_streaming(&params, usize::MAX, usize::MAX, |batch| {
+    search_streaming(&params, usize::MAX, |batch| {
         all_results.extend(batch);
     })?;
     Ok(all_results)
@@ -51,7 +51,6 @@ pub fn search(
 
 pub fn search_streaming<F>(
     params: &SearchParams,
-    batch_size: usize,
     limit: usize,
     mut on_batch: F,
 ) -> Result<(), String>
@@ -133,72 +132,73 @@ where
         .collect();
 
     let total_emitted = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<SearchResult>>(64);
 
-    let mut results: Vec<_> = doc_infos
-        .par_iter()
-        .flat_map_iter(|(rel_path, abs_path)| {
-            if params.cancelled.load(Ordering::Relaxed)
-                || total_emitted.load(Ordering::Relaxed) >= limit
-            {
-                return Vec::new();
-            }
+    let cancelled = Arc::clone(params.cancelled);
+    let needle_clone = needle.clone();
+    let limit_copy = limit;
+    let total_clone = Arc::clone(&total_emitted);
 
-            let matches = find_matching_lines(abs_path, &needle, params.cancelled);
-
-            if matches.is_empty() {
-                if !abs_path.exists() {
-                    return vec![];
+    let scan_handle = std::thread::Builder::new()
+        .name("sakuin-scan".into())
+        .spawn(move || {
+            doc_infos.par_iter().for_each(|(rel_path, abs_path)| {
+                if cancelled.load(Ordering::Relaxed)
+                    || total_clone.load(Ordering::Relaxed) >= limit_copy
+                {
+                    return;
                 }
-                if rel_path.to_lowercase().contains(needle.as_str()) {
-                    total_emitted.fetch_add(1, Ordering::Relaxed);
-                    vec![SearchResult {
-                        path: rel_path.clone(),
-                        line: 0,
-                        col: 0,
-                        snippet: String::new(),
-                        score: 0.0,
-                    }]
+
+                let matches = find_matching_lines(abs_path, &needle_clone, &cancelled);
+
+                let results = if matches.is_empty() {
+                    if !abs_path.exists() {
+                        return;
+                    }
+                    if rel_path.to_lowercase().contains(needle_clone.as_str()) {
+                        total_clone.fetch_add(1, Ordering::Relaxed);
+                        vec![SearchResult {
+                            path: rel_path.clone(),
+                            line: 0,
+                            col: 0,
+                            snippet: String::new(),
+                            score: 0.0,
+                        }]
+                    } else {
+                        return;
+                    }
                 } else {
-                    vec![]
-                }
-            } else {
-                let query_len = needle.len() as f32;
-                let density = (matches.len() as f32).log2().max(0.0) / 10.0;
-                let out: Vec<_> = matches
-                    .into_iter()
-                    .map(|(line, col, snippet)| SearchResult {
-                        score: (query_len / snippet.len().max(1) as f32).min(1.0) + density,
-                        path: rel_path.clone(),
-                        line,
-                        col,
-                        snippet,
-                    })
-                    .collect();
-                total_emitted.fetch_add(out.len(), Ordering::Relaxed);
-                out
-            }
+                    let query_len = needle_clone.len() as f32;
+                    let density = (matches.len() as f32).log2().max(0.0) / 10.0;
+                    let out: Vec<_> = matches
+                        .into_iter()
+                        .map(|(line, col, snippet)| SearchResult {
+                            score: (query_len / snippet.len().max(1) as f32).min(1.0) + density,
+                            path: rel_path.clone(),
+                            line,
+                            col,
+                            snippet,
+                        })
+                        .collect();
+                    total_clone.fetch_add(out.len(), Ordering::Relaxed);
+                    out
+                };
+
+                let _ = tx.send(results);
+            });
         })
-        .collect();
+        .expect("failed to spawn scan thread");
 
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut emitted = 0;
-    for chunk in results.chunks(batch_size) {
-        if params.cancelled.load(Ordering::Relaxed) {
+    for batch in rx {
+        if params.cancelled.load(Ordering::Relaxed)
+            || total_emitted.load(Ordering::Relaxed) >= limit
+        {
             break;
         }
-        let remaining = limit.saturating_sub(emitted);
-        if remaining == 0 {
-            break;
-        }
-        let take = chunk.len().min(remaining);
-        on_batch(chunk[..take].to_vec());
-        emitted += take;
+        on_batch(batch);
     }
+
+    let _ = scan_handle.join();
 
     Ok(())
 }
@@ -500,7 +500,15 @@ mod tests {
 
         let results = do_search(&reader, &schema, dir.path(), "ffi::CString");
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].snippet, "ffi::CString");
+        let best = results
+            .iter()
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        assert_eq!(best.snippet, "ffi::CString");
     }
 
     #[test]

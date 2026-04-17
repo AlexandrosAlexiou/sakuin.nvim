@@ -238,9 +238,9 @@ fn test_async_search_with_result_slot() {
     // Reset notification state
     reset_notify_state();
 
-    // Submit a search with generation 42, batch_size=500, limit=0 (unlimited)
+    // Submit a search with generation 42, limit=0 (unlimited)
     let query = CString::new("hello").unwrap();
-    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 42, 500, 0);
+    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 42, 0);
     assert_eq!(rc, 0, "sakuin_search_submit should succeed");
 
     // Wait for the worker to notify us (may get batch + done messages)
@@ -1068,7 +1068,7 @@ fn test_search_cancel() {
 
     // Submit and immediately cancel.
     let query = CString::new("ThreadPool").unwrap();
-    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 99, 500, 0);
+    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 99, 0);
     assert_eq!(rc, 0);
     sakuin::sakuin_search_cancel();
 

@@ -67,7 +67,6 @@ require("sakuin").setup({
 
   -- Search options
   search = {
-    batch_size = 500,  -- results per streaming batch
     limit = 10000,     -- max total results (0 = unlimited)
   },
 
