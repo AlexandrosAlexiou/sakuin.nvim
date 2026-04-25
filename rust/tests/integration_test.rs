@@ -1102,7 +1102,7 @@ fn create_git_project_for_e2e() -> TempDir {
     let root = dir.path();
 
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(root)
         .output()
         .unwrap();
