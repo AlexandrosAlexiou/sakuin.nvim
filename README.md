@@ -37,6 +37,8 @@ A fast, indexed alternative to live grep for large codebases. Builds a persisten
 - **Incremental indexing**: only changed files are re-indexed on startup, keeping sync fast even on large projects
 - **Live index updates**: a filesystem watcher re-indexes files as you save, with no manual intervention
 - **Respects `.gitignore`**: ignored files, build artifacts, lockfiles, and `node_modules` are skipped automatically
+- **Git-aware change detection**: uses `git status` and `git diff` to precisely identify changed files for incremental updates, avoiding unnecessary filesystem scans
+- **File-based logging**: structured logs written to disk with a built-in log viewer (`:SakuinLogs`) for real-time debugging
 
 ## Configuration
 
@@ -64,6 +66,12 @@ require("sakuin").setup({
 
   -- Respect .gitignore / .ignore files
   respect_gitignore = true,
+
+  -- Log level: "error", "warn", "info", "debug", "trace", "off"
+  log_level = "info",
+
+  -- Path to the log file
+  log_file = vim.fn.stdpath("state") .. "/sakuin.log",
 
   -- Search options
   search = {
@@ -93,6 +101,7 @@ require("sakuin").setup({
 | `:SakuinBuild` | Full index rebuild |
 | `:SakuinUpdate` | Incremental index update |
 | `:SakuinStats` | Show index statistics |
+| `:SakuinLogs [level]` | Open log viewer (optionally set log level, e.g. `:SakuinLogs debug`) |
 
 ## Keymaps
 
