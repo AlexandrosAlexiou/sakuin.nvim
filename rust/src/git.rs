@@ -45,10 +45,7 @@ pub fn detect_changes(project_root: &Path) -> Result<GitChanges, String> {
     let mut changes = GitChanges::default();
 
     // Get the HEAD tree (if any — a fresh repo with no commits has no HEAD tree)
-    let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|r| r.peel_to_tree().ok());
+    let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
 
     // Diff HEAD tree against the working directory.
     // This shows us everything that changed relative to the last commit.
@@ -113,11 +110,7 @@ pub fn detect_changes(project_root: &Path) -> Result<GitChanges, String> {
     Ok(changes)
 }
 
-fn categorize_delta(
-    delta: &git2::DiffDelta<'_>,
-    project_root: &Path,
-    changes: &mut GitChanges,
-) {
+fn categorize_delta(delta: &git2::DiffDelta<'_>, project_root: &Path, changes: &mut GitChanges) {
     use git2::Delta;
 
     match delta.status() {
@@ -245,17 +238,45 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
-        Command::new("git").args(["init"]).current_dir(root).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(root).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(root).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .output()
+            .unwrap();
 
-        std::fs::write(root.join("hello.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
-        std::fs::write(root.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
+        std::fs::write(
+            root.join("hello.rs"),
+            "fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/utils.rs"), "pub fn helper() {}\n").unwrap();
 
-        Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
-        Command::new("git").args(["commit", "-m", "initial"]).current_dir(root).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(root)
+            .output()
+            .unwrap();
 
         dir
     }
@@ -264,7 +285,9 @@ mod tests {
     fn test_is_git_internal_path() {
         assert!(is_git_internal_path(Path::new("/repo/.git/index")));
         assert!(is_git_internal_path(Path::new("/repo/.git/HEAD")));
-        assert!(is_git_internal_path(Path::new("/repo/.git/refs/heads/main")));
+        assert!(is_git_internal_path(Path::new(
+            "/repo/.git/refs/heads/main"
+        )));
         assert!(!is_git_internal_path(Path::new("/repo/src/main.rs")));
         assert!(!is_git_internal_path(Path::new("/repo/.gitignore")));
     }
@@ -274,7 +297,10 @@ mod tests {
         let root = Path::new("/repo");
         assert!(is_git_sentinel(Path::new("/repo/.git/index"), root));
         assert!(is_git_sentinel(Path::new("/repo/.git/HEAD"), root));
-        assert!(!is_git_sentinel(Path::new("/repo/.git/refs/heads/main"), root));
+        assert!(!is_git_sentinel(
+            Path::new("/repo/.git/refs/heads/main"),
+            root
+        ));
         assert!(!is_git_sentinel(Path::new("/repo/src/main.rs"), root));
     }
 
@@ -283,7 +309,11 @@ mod tests {
         let project = create_git_project();
         let oid = current_head_oid(project.path());
         assert!(oid.is_some(), "Should return HEAD oid for a git repo");
-        assert_eq!(oid.as_ref().unwrap().len(), 40, "SHA-1 hex should be 40 chars");
+        assert_eq!(
+            oid.as_ref().unwrap().len(),
+            40,
+            "SHA-1 hex should be 40 chars"
+        );
     }
 
     #[test]
@@ -299,7 +329,8 @@ mod tests {
         assert!(
             changes.modified.is_empty() && changes.deleted.is_empty(),
             "Clean repo should have no changes, got {} modified, {} deleted",
-            changes.modified.len(), changes.deleted.len()
+            changes.modified.len(),
+            changes.deleted.len()
         );
     }
 
@@ -307,10 +338,18 @@ mod tests {
     fn test_detect_changes_modified_file() {
         let project = create_git_project();
         let root = project.path();
-        std::fs::write(root.join("hello.rs"), "fn main() { println!(\"world\"); }\n").unwrap();
+        std::fs::write(
+            root.join("hello.rs"),
+            "fn main() { println!(\"world\"); }\n",
+        )
+        .unwrap();
 
         let changes = detect_changes(root).unwrap();
-        assert!(has_path_ending(&changes.modified, "hello.rs"), "got: {:?}", changes.modified);
+        assert!(
+            has_path_ending(&changes.modified, "hello.rs"),
+            "got: {:?}",
+            changes.modified
+        );
     }
 
     #[test]
@@ -320,7 +359,11 @@ mod tests {
         std::fs::write(root.join("new_file.txt"), "brand new\n").unwrap();
 
         let changes = detect_changes(root).unwrap();
-        assert!(has_path_ending(&changes.modified, "new_file.txt"), "got: {:?}", changes.modified);
+        assert!(
+            has_path_ending(&changes.modified, "new_file.txt"),
+            "got: {:?}",
+            changes.modified
+        );
     }
 
     #[test]
@@ -330,7 +373,11 @@ mod tests {
         std::fs::remove_file(root.join("lib.rs")).unwrap();
 
         let changes = detect_changes(root).unwrap();
-        assert!(has_path_ending(&changes.deleted, "lib.rs"), "got: {:?}", changes.deleted);
+        assert!(
+            has_path_ending(&changes.deleted, "lib.rs"),
+            "got: {:?}",
+            changes.deleted
+        );
     }
 
     #[test]
@@ -339,13 +386,29 @@ mod tests {
         let root = project.path();
         let old_oid = current_head_oid(root).unwrap();
 
-        Command::new("git").args(["checkout", "-b", "feature"]).current_dir(root).output().unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(root)
+            .output()
+            .unwrap();
         std::fs::write(root.join("feature.rs"), "pub fn feature_fn() {}\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
-        Command::new("git").args(["commit", "-m", "add feature"]).current_dir(root).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add feature"])
+            .current_dir(root)
+            .output()
+            .unwrap();
 
         let changes = detect_head_change(root, Some(&old_oid)).unwrap();
-        assert!(has_path_ending(&changes.modified, "feature.rs"), "got: {:?}", changes.modified);
+        assert!(
+            has_path_ending(&changes.modified, "feature.rs"),
+            "got: {:?}",
+            changes.modified
+        );
     }
 
     #[test]

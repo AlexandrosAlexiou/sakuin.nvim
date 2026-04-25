@@ -1101,16 +1101,44 @@ fn create_git_project_for_e2e() -> TempDir {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
-    Command::new("git").args(["init"]).current_dir(root).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(root).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(root)
+        .output()
+        .unwrap();
 
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/main.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn original_function() -> i32 { 42 }\n").unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"hello\"); }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn original_function() -> i32 { 42 }\n",
+    )
+    .unwrap();
 
-    Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
-    Command::new("git").args(["commit", "-m", "initial commit"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(root)
+        .output()
+        .unwrap();
 
     dir
 }
@@ -1138,17 +1166,24 @@ fn test_e2e_git_new_file_then_update() {
 
     // Verify initial content is indexed
     let results = sync_search("original_function");
-    assert!(!results.is_empty(), "Should find original_function after initial build");
+    assert!(
+        !results.is_empty(),
+        "Should find original_function after initial build"
+    );
 
     // Unique content should NOT exist yet
     let results = sync_search("brand_new_e2e_feature");
-    assert!(results.is_empty(), "brand_new_e2e_feature should not exist before adding");
+    assert!(
+        results.is_empty(),
+        "brand_new_e2e_feature should not exist before adding"
+    );
 
     // Add a new file (simulates a git stash pop / checkout that adds files)
     fs::write(
         root.join("src/feature.rs"),
         "pub fn brand_new_e2e_feature() -> bool { true }\n",
-    ).unwrap();
+    )
+    .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Incremental update picks up the new file
@@ -1179,14 +1214,38 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
     let root = project.path();
 
     // Create a feature branch with different content
-    Command::new("git").args(["checkout", "-b", "feature-branch"]).current_dir(root).output().unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn replaced_function() -> &'static str { \"feature\" }\n").unwrap();
-    fs::write(root.join("src/extra.rs"), "pub fn extra_branch_only_fn() {}\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
-    Command::new("git").args(["commit", "-m", "feature branch changes"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["checkout", "-b", "feature-branch"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn replaced_function() -> &'static str { \"feature\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/extra.rs"),
+        "pub fn extra_branch_only_fn() {}\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "feature branch changes"])
+        .current_dir(root)
+        .output()
+        .unwrap();
 
     // Go back to main and build the index there
-    Command::new("git").args(["checkout", "main"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(root)
+        .output()
+        .unwrap();
 
     // On main: lib.rs has original_function, extra.rs doesn't exist
     init_and_build_git(&project);
@@ -1195,13 +1254,23 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
     assert!(!results.is_empty(), "Should find original_function on main");
 
     let results = sync_search("replaced_function");
-    assert!(results.is_empty(), "replaced_function should not exist on main");
+    assert!(
+        results.is_empty(),
+        "replaced_function should not exist on main"
+    );
 
     let results = sync_search("extra_branch_only_fn");
-    assert!(results.is_empty(), "extra_branch_only_fn should not exist on main");
+    assert!(
+        results.is_empty(),
+        "extra_branch_only_fn should not exist on main"
+    );
 
     // Now switch to the feature branch
-    Command::new("git").args(["checkout", "feature-branch"]).current_dir(root).output().unwrap();
+    Command::new("git")
+        .args(["checkout", "feature-branch"])
+        .current_dir(root)
+        .output()
+        .unwrap();
 
     // Verify the checkout actually changed the files on disk
     let lib_content = fs::read_to_string(root.join("src/lib.rs")).unwrap();
@@ -1261,7 +1330,10 @@ fn test_e2e_git_file_deleted_then_update() {
 
     // Verify lib.rs content is indexed
     let results = sync_search("original_function");
-    assert!(!results.is_empty(), "Should find original_function initially");
+    assert!(
+        !results.is_empty(),
+        "Should find original_function initially"
+    );
 
     // Delete the file (simulates git rm or checkout to branch without the file)
     fs::remove_file(root.join("src/lib.rs")).unwrap();
