@@ -123,9 +123,6 @@ local function on_async_notification()
 		end
 	end
 
-	-- The worker pushes batch/done/error messages; we may have multiple per wake-up.
-	-- Dispatch by generation so stale-generation coroutines still receive their
-	-- terminal Done/Error and unwind.
 	while true do
 		local raw = lib.sakuin_search_take_result()
 		if raw == nil then
@@ -136,21 +133,17 @@ local function on_async_notification()
 		lib.sakuin_free_string(raw)
 
 		local ok, msg = pcall(vim.json.decode, json_str)
-		if not ok then
-			-- Decode failed — no generation to dispatch on; drop.
-		else
-			local cb = search_callbacks[msg.generation]
-			if cb then
-				local msg_type = msg.type
-				if msg_type == "batch" then
-					cb("batch", msg.results, nil, msg.total_so_far)
-				elseif msg_type == "done" then
-					search_callbacks[msg.generation] = nil
-					cb("done", nil, nil, msg.total)
-				elseif msg_type == "error" then
-					search_callbacks[msg.generation] = nil
-					cb("error", nil, msg.error, nil)
-				end
+		local cb = ok and search_callbacks[msg.generation]
+		if cb then
+			local msg_type = msg.type
+			if msg_type == "batch" then
+				cb("batch", msg.results, nil, msg.total_so_far)
+			elseif msg_type == "done" then
+				search_callbacks[msg.generation] = nil
+				cb("done", nil, nil, msg.total)
+			elseif msg_type == "error" then
+				search_callbacks[msg.generation] = nil
+				cb("error", nil, msg.error, nil)
 			end
 		end
 	end
