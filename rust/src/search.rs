@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -124,16 +125,6 @@ where
         return Ok(());
     }
 
-    let doc_infos: Vec<_> = top_docs
-        .into_iter()
-        .filter_map(|(_score, doc_address)| {
-            let doc: TantivyDocument = searcher.doc(doc_address).ok()?;
-            let rel_path = doc.get_first(path_field)?.as_str()?.to_string();
-            let abs_path = params.project_root.join(&rel_path);
-            Some((rel_path, abs_path))
-        })
-        .collect();
-
     let total_emitted = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<SearchResult>>(64);
 
@@ -141,27 +132,38 @@ where
     let needle_clone = needle.clone();
     let limit_copy = limit;
     let total_clone = Arc::clone(&total_emitted);
+    let project_root = params.project_root.to_path_buf();
 
     let scan_handle = std::thread::Builder::new()
         .name("sakuin-scan".into())
         .spawn(move || {
-            doc_infos.par_iter().for_each(|(rel_path, abs_path)| {
+            top_docs.into_par_iter().for_each(|(_score, doc_address)| {
                 if cancelled.load(Ordering::Relaxed)
                     || total_clone.load(Ordering::Relaxed) >= limit_copy
                 {
                     return;
                 }
 
-                let matches = find_matching_lines(abs_path, &needle_clone, &cancelled);
+                let doc: TantivyDocument = match searcher.doc(doc_address) {
+                    Ok(d) => d,
+                    Err(_) => return,
+                };
+                let rel_path = match doc.get_first(path_field).and_then(|v| v.as_str()) {
+                    Some(s) => s.to_string(),
+                    None => return,
+                };
+                let abs_path = project_root.join(&rel_path);
+
+                let matches = find_matching_lines(&abs_path, &needle_clone, &cancelled);
 
                 let results = if matches.is_empty() {
                     if !abs_path.exists() {
                         return;
                     }
-                    if contains_ascii_ci(rel_path, &needle_clone) {
+                    if contains_ascii_ci(&rel_path, &needle_clone) {
                         total_clone.fetch_add(1, Ordering::Relaxed);
                         vec![SearchResult {
-                            path: rel_path.clone(),
+                            path: rel_path,
                             line: 0,
                             col: 0,
                             snippet: String::new(),
@@ -211,27 +213,35 @@ fn find_matching_lines(
     needle: &str,
     cancelled: &Arc<AtomicBool>,
 ) -> Vec<(u32, u32, String)> {
-    let contents = match fs::read_to_string(file_path) {
-        Ok(c) => c,
+    let file = match fs::File::open(file_path) {
+        Ok(f) => f,
         Err(_) => return Vec::new(),
     };
+    let mut reader = BufReader::new(file);
 
     let mut matches = Vec::new();
-    let mut lowered = String::new();
+    let mut line = String::with_capacity(256);
+    let mut lowered = String::with_capacity(256);
+    let mut line_idx: u32 = 0;
 
-    for (line_idx, line) in contents.lines().enumerate() {
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        line_idx += 1;
+
         if line_idx & 0x1FF == 0 && cancelled.load(Ordering::Relaxed) {
             return matches;
         }
+
         lowered.clear();
-        lowered.push_str(line);
+        lowered.push_str(&line);
         lowered.make_ascii_lowercase();
         if let Some(col) = lowered.find(needle) {
-            matches.push((
-                (line_idx + 1) as u32,
-                (col + 1) as u32,
-                line.trim().to_string(),
-            ));
+            matches.push((line_idx, (col + 1) as u32, line.trim().to_string()));
         }
     }
 
