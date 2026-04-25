@@ -41,17 +41,16 @@ function M.sakuin(opts)
 			local my_gen = generation
 			local done = false
 
-			-- Register the streaming callback.
+			-- Register a per-generation streaming callback.
 			-- This runs on the main Neovim thread (via vim.schedule in ffi.lua).
 			-- We accumulate items into a shared table and wake the async coroutine.
+			-- The ffi dispatcher auto-unregisters us on done/error, so this
+			-- coroutine always receives a terminal event and unwinds — even when
+			-- a newer query supersedes us.
 			local pending_items = {} ---@type snacks.picker.finder.Item[]
 			local error_msg = nil ---@type string?
 
-			sakuin_ffi.set_search_callback(function(msg_type, msg_generation, results, err)
-				if msg_generation ~= my_gen then
-					return
-				end
-
+			sakuin_ffi.register_search_callback(my_gen, function(msg_type, results, err)
 				if msg_type == "batch" and results then
 					for _, r in ipairs(results) do
 						local col_nr = r.col - 1 -- 0-indexed for snacks
@@ -76,6 +75,7 @@ function M.sakuin(opts)
 
 			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
 			if rc ~= 0 then
+				sakuin_ffi.unregister_search_callback(my_gen)
 				if submit_err then
 					vim.schedule(function()
 						vim.notify("[sakuin] " .. submit_err, vim.log.levels.ERROR)
@@ -107,7 +107,9 @@ function M.sakuin(opts)
 				cb(item)
 			end
 
-			sakuin_ffi.set_search_callback(nil)
+			-- Belt-and-braces: dispatcher already removed us on done/error,
+			-- but ensure we're gone if this path was hit via some other exit.
+			sakuin_ffi.unregister_search_callback(my_gen)
 
 			if error_msg then
 				vim.schedule(function()
@@ -132,7 +134,7 @@ function M.sakuin(opts)
 		show_empty = true,
 		on_close = function()
 			sakuin_ffi.search_cancel()
-			sakuin_ffi.set_search_callback(nil)
+			sakuin_ffi.clear_search_callbacks()
 		end,
 	}, opts)
 
