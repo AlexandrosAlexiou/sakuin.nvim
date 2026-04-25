@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::git;
+
 /// Handle to a running filesystem watcher. Call `stop()` to shut it down.
 pub struct WatcherHandle {
     _watcher: RecommendedWatcher,
@@ -39,7 +41,7 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
 
     let index_dir_clone = index_dir.clone();
     std::thread::spawn(move || {
-        process_events(rx, stop_flag_clone, &index_dir_clone);
+        process_events(rx, stop_flag_clone, &project_root, &index_dir_clone);
     });
 
     Ok(WatcherHandle {
@@ -51,11 +53,18 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
 fn process_events(
     rx: std::sync::mpsc::Receiver<notify::Result<Event>>,
     stop_flag: Arc<AtomicBool>,
+    project_root: &Path,
     index_dir: &Path,
 ) {
     use std::collections::HashSet;
 
-    let debounce_duration = Duration::from_millis(200);
+    /// Debounce window for normal file events.
+    const DEBOUNCE_NORMAL: Duration = Duration::from_millis(200);
+    /// Longer debounce for git operations — they produce many events in a burst.
+    const DEBOUNCE_GIT: Duration = Duration::from_millis(500);
+
+    // Track HEAD so we can diff old vs new on branch switches.
+    let mut last_head_oid = git::current_head_oid(project_root);
 
     loop {
         if stop_flag.load(Ordering::SeqCst) {
@@ -74,58 +83,152 @@ fn process_events(
 
         let mut paths_to_reindex: HashSet<PathBuf> = HashSet::new();
         let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
+        let mut git_sentinel_changed = false;
 
-        categorize_event(&event, &mut paths_to_reindex, &mut paths_to_remove);
+        classify_event(
+            &event,
+            project_root,
+            &mut paths_to_reindex,
+            &mut paths_to_remove,
+            &mut git_sentinel_changed,
+        );
 
-        let deadline = std::time::Instant::now() + debounce_duration;
+        // Use a longer debounce window if a git sentinel was touched.
+        let debounce = if git_sentinel_changed {
+            DEBOUNCE_GIT
+        } else {
+            DEBOUNCE_NORMAL
+        };
+
+        let deadline = std::time::Instant::now() + debounce;
         while std::time::Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(event)) => {
-                    categorize_event(&event, &mut paths_to_reindex, &mut paths_to_remove);
+                    classify_event(
+                        &event,
+                        project_root,
+                        &mut paths_to_reindex,
+                        &mut paths_to_remove,
+                        &mut git_sentinel_changed,
+                    );
                 }
                 Ok(Err(e)) => log::warn!("Watcher error: {}", e),
                 Err(_) => break,
             }
         }
 
+        // Filter out index directory events.
         paths_to_reindex.retain(|p| !p.starts_with(index_dir));
         paths_to_remove.retain(|p| !p.starts_with(index_dir));
 
-        let to_remove: Vec<PathBuf> = paths_to_remove.into_iter().collect();
-        let to_reindex: Vec<PathBuf> = paths_to_reindex
-            .into_iter()
-            .filter(|p| !to_remove.contains(p)) // skip rename-away paths
-            .collect();
-
-        if !to_remove.is_empty() || !to_reindex.is_empty() {
-            log::debug!(
-                "Watcher: batching {} removes + {} reindexes into one commit",
-                to_remove.len(),
-                to_reindex.len()
-            );
-            if let Err(e) = crate::state::batch_update_files(&to_remove, &to_reindex) {
-                log::warn!("Watcher: batch update failed: {}", e);
-            }
+        if git_sentinel_changed {
+            // A git operation occurred — use libgit2 for precise change detection
+            // instead of relying on the (possibly incomplete) filesystem events.
+            handle_git_operation(project_root, &mut last_head_oid);
+        } else {
+            // Normal file edits — use the filesystem events directly.
+            handle_file_events(paths_to_reindex, paths_to_remove);
         }
     }
 }
 
-fn categorize_event(
+/// Classify a single filesystem event into reindex/remove/git-sentinel buckets.
+fn classify_event(
     event: &Event,
+    project_root: &Path,
     reindex: &mut std::collections::HashSet<PathBuf>,
     remove: &mut std::collections::HashSet<PathBuf>,
+    git_sentinel_changed: &mut bool,
 ) {
-    match &event.kind {
-        EventKind::Create(_) | EventKind::Modify(_) => {
-            for path in &event.paths {
+    for path in &event.paths {
+        // Check for git sentinel changes first.
+        if git::is_git_sentinel(path, project_root) {
+            *git_sentinel_changed = true;
+            log::debug!("Git sentinel changed: {:?}", path);
+            // Don't add .git/ paths to the reindex/remove sets.
+            continue;
+        }
+
+        // Skip all other .git/ internal files.
+        if git::is_git_internal_path(path) {
+            continue;
+        }
+
+        match &event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
                 reindex.insert(path.clone());
             }
-        }
-        EventKind::Remove(_) => {
-            for path in &event.paths {
+            EventKind::Remove(_) => {
                 remove.insert(path.clone());
             }
+            _ => {}
         }
-        _ => {}
+    }
+}
+
+/// Handle a detected git operation by using libgit2 to compute the precise
+/// set of changed files, then batch-update the index.
+fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>) {
+    log::info!("Git operation detected — computing changes via libgit2");
+
+    // Try a targeted HEAD diff first (cheaper for branch switches).
+    let changes = git::detect_head_change(project_root, last_head_oid.as_deref())
+        .or_else(|e| {
+            log::warn!("HEAD-based diff failed ({}), falling back to full working tree diff", e);
+            git::detect_changes(project_root)
+        });
+
+    // Update tracked HEAD for next time.
+    *last_head_oid = git::current_head_oid(project_root);
+
+    match changes {
+        Ok(changes) if changes.modified.is_empty() && changes.deleted.is_empty() => {
+            log::debug!("Git operation produced no indexable changes");
+        }
+        Ok(changes) => {
+            log::info!(
+                "Git operation: {} to reindex, {} to remove",
+                changes.modified.len(),
+                changes.deleted.len()
+            );
+            for p in &changes.modified {
+                log::debug!("  git op reindex: {:?}", p);
+            }
+            for p in &changes.deleted {
+                log::debug!("  git op remove: {:?}", p);
+            }
+            if let Err(e) =
+                crate::state::batch_update_files(&changes.deleted, &changes.modified)
+            {
+                log::warn!("Git-triggered batch update failed: {}", e);
+            }
+        }
+        Err(e) => {
+            log::warn!("Git change detection failed: {}", e);
+            // Not a git repo or something went wrong — nothing to do.
+        }
+    }
+}
+
+/// Handle normal (non-git) file events.
+fn handle_file_events(
+    paths_to_reindex: std::collections::HashSet<PathBuf>,
+    paths_to_remove: std::collections::HashSet<PathBuf>,
+) {
+    let to_remove: Vec<PathBuf> = paths_to_remove.into_iter().collect();
+    let to_reindex: Vec<PathBuf> = paths_to_reindex
+        .into_iter()
+        .filter(|p| !to_remove.contains(p))
+        .collect();
+
+    if !to_remove.is_empty() || !to_reindex.is_empty() {
+        log::debug!(
+            "Watcher: batching {} removes + {} reindexes into one commit",
+            to_remove.len(),
+            to_reindex.len()
+        );
+        if let Err(e) = crate::state::batch_update_files(&to_remove, &to_reindex) {
+            log::warn!("Watcher: batch update failed: {}", e);
+        }
     }
 }
