@@ -66,6 +66,8 @@ local function init_engine(config)
 		ignore_patterns = config.ignore_patterns or {},
 		include_extensions = config.include_extensions,
 		respect_gitignore = config.respect_gitignore ~= false,
+		log_level = config.log_level or "info",
+		log_file = config.log_file,
 	})
 	local rc = ffi_mod.init(root, index_dir, rust_config)
 	if rc ~= 0 then

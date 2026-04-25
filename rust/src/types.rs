@@ -24,6 +24,16 @@ pub struct SakuinConfig {
     /// If set, only index files with these extensions. If None, all text files are indexed.
     pub include_extensions: Option<Vec<String>>,
     pub respect_gitignore: bool,
+    /// Log level: "error", "warn", "info", "debug", "trace", "off". Default: "info".
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    /// Path to the log file. If not set, logging to file is disabled.
+    #[serde(default)]
+    pub log_file: Option<String>,
+}
+
+fn default_log_level() -> String {
+    "info".into()
 }
 
 impl Default for SakuinConfig {
@@ -41,6 +51,8 @@ impl Default for SakuinConfig {
             ],
             include_extensions: None,
             respect_gitignore: true,
+            log_level: "info".into(),
+            log_file: None,
         }
     }
 }

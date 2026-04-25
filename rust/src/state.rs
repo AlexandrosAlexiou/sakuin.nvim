@@ -69,6 +69,14 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
         None => SakuinConfig::default(),
     };
 
+    // Initialize the file logger before anything else so all
+    // subsequent log::info!/debug!/etc. calls are captured.
+    let level = crate::logging::parse_level(&config.log_level)
+        .unwrap_or(log::LevelFilter::Info);
+    if let Some(ref log_file) = config.log_file {
+        crate::logging::init(log_file, level)?;
+    }
+
     let index = index::open_or_create_index(&index_dir)?;
     let schema = index.schema();
     let reader = index::create_reader(&index)?;

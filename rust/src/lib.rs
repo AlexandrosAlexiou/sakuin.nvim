@@ -6,6 +6,7 @@
 mod ffi;
 pub(crate) mod git;
 mod index;
+mod logging;
 mod search;
 mod state;
 mod tokenizer;
@@ -347,6 +348,32 @@ mod ffi_exports {
         unsafe {
             ffi::free_c_string(ptr);
         }
+    }
+
+    // ========================================================================
+    // Logging
+    // ========================================================================
+
+    /// Change the log level at runtime.
+    ///
+    /// `level`: one of "error", "warn", "info", "debug", "trace", "off".
+    /// Returns 0 on success, -1 if the level string is unrecognized.
+    #[no_mangle]
+    pub extern "C" fn sakuin_set_log_level(level: *const c_char) -> i32 {
+        ffi::ffi_try(|| {
+            let level_str = unsafe { ffi::cstr_to_str(level)? };
+            let filter = logging::parse_level(level_str)
+                .ok_or_else(|| format!("Unknown log level: '{}'", level_str))?;
+            logging::set_level(filter);
+            log::info!("Log level changed to {}", level_str);
+            Ok(())
+        })
+    }
+
+    /// Clear the log file contents.
+    #[no_mangle]
+    pub extern "C" fn sakuin_clear_logs() {
+        logging::clear();
     }
 }
 

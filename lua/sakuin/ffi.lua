@@ -52,6 +52,10 @@ ffi.cdef([[
   /* Memory */
   void        sakuin_free_string(const char* s);
 
+  /* Logging */
+  int         sakuin_set_log_level(const char* level);
+  void        sakuin_clear_logs(void);
+
   /* libuv — we only need the send function pointer */
   int         uv_async_send(void* handle);
 ]])
@@ -358,6 +362,19 @@ function M.last_error()
 	local msg = ffi.string(raw)
 	l.sakuin_free_string(raw)
 	return msg
+end
+
+--- Change the log level at runtime.
+---@param level string One of "error", "warn", "info", "debug", "trace", "off"
+---@return boolean success
+function M.set_log_level(level)
+	local rc = get_lib().sakuin_set_log_level(level)
+	return tonumber(rc) == 0
+end
+
+--- Clear the log file contents.
+function M.clear_logs()
+	get_lib().sakuin_clear_logs()
 end
 
 return M
