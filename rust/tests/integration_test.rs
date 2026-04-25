@@ -1089,3 +1089,192 @@ fn test_search_cancel() {
 
     sakuin::sakuin_shutdown();
 }
+
+// ============================================================================
+// End-to-end git workflow tests
+// ============================================================================
+
+/// Create a temp dir with a real git repo, some committed files, and return it.
+fn create_git_project_for_e2e() -> TempDir {
+    use std::process::Command;
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    Command::new("git").args(["init"]).current_dir(root).output().unwrap();
+    Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(root).output().unwrap();
+    Command::new("git").args(["config", "user.name", "Test"]).current_dir(root).output().unwrap();
+
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn original_function() -> i32 { 42 }\n").unwrap();
+
+    Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
+    Command::new("git").args(["commit", "-m", "initial commit"]).current_dir(root).output().unwrap();
+
+    dir
+}
+
+/// Helper: init + build index on a git project.
+fn init_and_build_git(project: &TempDir) {
+    let root = project.path();
+    let index_dir = root.join(".sakuin");
+    let c_root = CString::new(root.to_str().unwrap()).unwrap();
+    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
+
+    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
+    assert_eq!(rc, 0, "sakuin_init should succeed");
+
+    let rc = sakuin::sakuin_build_index();
+    assert_eq!(rc, 0, "sakuin_build_index should succeed");
+}
+
+#[test]
+#[serial]
+fn test_e2e_git_new_file_then_update() {
+    let project = create_git_project_for_e2e();
+    let root = project.path();
+    init_and_build_git(&project);
+
+    // Verify initial content is indexed
+    let results = sync_search("original_function");
+    assert!(!results.is_empty(), "Should find original_function after initial build");
+
+    // Unique content should NOT exist yet
+    let results = sync_search("brand_new_e2e_feature");
+    assert!(results.is_empty(), "brand_new_e2e_feature should not exist before adding");
+
+    // Add a new file (simulates a git stash pop / checkout that adds files)
+    fs::write(
+        root.join("src/feature.rs"),
+        "pub fn brand_new_e2e_feature() -> bool { true }\n",
+    ).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Incremental update picks up the new file
+    let rc = sakuin::sakuin_update_index();
+    assert_eq!(rc, 0);
+
+    let results = sync_search("brand_new_e2e_feature");
+    assert!(
+        !results.is_empty(),
+        "Should find brand_new_e2e_feature after incremental update"
+    );
+    let paths = result_paths(&results);
+    assert!(
+        paths.iter().any(|p| p.contains("feature.rs")),
+        "Expected feature.rs in results, got: {:?}",
+        paths
+    );
+
+    sakuin::sakuin_shutdown();
+}
+
+#[test]
+#[serial]
+fn test_e2e_git_branch_switch_modifies_and_deletes() {
+    use std::process::Command;
+
+    let project = create_git_project_for_e2e();
+    let root = project.path();
+
+    // Create a feature branch with different content
+    Command::new("git").args(["checkout", "-b", "feature-branch"]).current_dir(root).output().unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn replaced_function() -> &'static str { \"feature\" }\n").unwrap();
+    fs::write(root.join("src/extra.rs"), "pub fn extra_branch_only_fn() {}\n").unwrap();
+    Command::new("git").args(["add", "."]).current_dir(root).output().unwrap();
+    Command::new("git").args(["commit", "-m", "feature branch changes"]).current_dir(root).output().unwrap();
+
+    // Go back to main and build the index there
+    Command::new("git").args(["checkout", "main"]).current_dir(root).output().unwrap();
+
+    // On main: lib.rs has original_function, extra.rs doesn't exist
+    init_and_build_git(&project);
+
+    let results = sync_search("original_function");
+    assert!(!results.is_empty(), "Should find original_function on main");
+
+    let results = sync_search("replaced_function");
+    assert!(results.is_empty(), "replaced_function should not exist on main");
+
+    let results = sync_search("extra_branch_only_fn");
+    assert!(results.is_empty(), "extra_branch_only_fn should not exist on main");
+
+    // Now switch to the feature branch
+    Command::new("git").args(["checkout", "feature-branch"]).current_dir(root).output().unwrap();
+
+    // Verify the checkout actually changed the files on disk
+    let lib_content = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_content.contains("replaced_function"),
+        "git checkout should have changed lib.rs, but got: {}",
+        lib_content
+    );
+    assert!(
+        root.join("src/extra.rs").exists(),
+        "git checkout should have created extra.rs"
+    );
+
+    // Ensure mtime differs from build time (git checkout can preserve mtime)
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Touch the files to guarantee mtime change (git checkout may reuse mtime)
+    let now_content = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    fs::write(root.join("src/lib.rs"), &now_content).unwrap();
+
+    // Incremental update should pick up changes from the branch switch
+    let rc = sakuin::sakuin_update_index();
+    assert_eq!(rc, 0);
+
+    // original_function was replaced — should no longer appear
+    let results = sync_search("original_function");
+    assert!(
+        results.is_empty(),
+        "original_function should be gone after switching to feature branch"
+    );
+
+    // replaced_function should now be found
+    let results = sync_search("replaced_function");
+    assert!(
+        !results.is_empty(),
+        "Should find replaced_function after branch switch"
+    );
+
+    // extra.rs should now be indexed
+    let results = sync_search("extra_branch_only_fn");
+    assert!(
+        !results.is_empty(),
+        "Should find extra_branch_only_fn after branch switch"
+    );
+
+    sakuin::sakuin_shutdown();
+}
+
+#[test]
+#[serial]
+fn test_e2e_git_file_deleted_then_update() {
+    let project = create_git_project_for_e2e();
+    let root = project.path();
+    init_and_build_git(&project);
+
+    // Verify lib.rs content is indexed
+    let results = sync_search("original_function");
+    assert!(!results.is_empty(), "Should find original_function initially");
+
+    // Delete the file (simulates git rm or checkout to branch without the file)
+    fs::remove_file(root.join("src/lib.rs")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let rc = sakuin::sakuin_update_index();
+    assert_eq!(rc, 0);
+
+    let results = sync_search("original_function");
+    let paths = result_paths(&results);
+    assert!(
+        !paths.iter().any(|p| p.contains("lib.rs")),
+        "lib.rs should no longer appear after deletion, got: {:?}",
+        paths
+    );
+
+    sakuin::sakuin_shutdown();
+}

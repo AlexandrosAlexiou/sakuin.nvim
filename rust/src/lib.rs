@@ -4,6 +4,7 @@
 //! LuaJIT FFI loads at runtime.
 
 mod ffi;
+pub(crate) mod git;
 mod index;
 mod search;
 mod state;
