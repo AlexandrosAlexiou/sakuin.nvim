@@ -707,13 +707,29 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             Err(_) => break,
         };
 
-        // Drain the channel: if multiple requests queued up, only execute the latest one.
+        // Drain the channel: only execute the latest request, but record every
+        // skipped generation so we can emit a terminal Done for each. Without
+        // this, the Lua coroutine waiting on a skipped generation would stay
+        // suspended forever (its callback would never observe `done`), leaking
+        // its captured `pending_items` buffer and frame.
         let mut latest = request;
+        let mut skipped_gens: Vec<u64> = Vec::new();
         while let Ok(newer) = rx.try_recv() {
+            skipped_gens.push(latest.generation);
             latest = newer;
         }
+        if !skipped_gens.is_empty() {
+            let mut q = search_result_queue().lock();
+            for gen in skipped_gens {
+                q.push_back(SearchResultMessage::Done {
+                    generation: gen,
+                    total: 0,
+                });
+            }
+            drop(q);
+            notify_main_thread();
+        }
 
-        search_result_queue().lock().clear();
         cancel_flag.store(false, Ordering::SeqCst);
 
         let generation = latest.generation;
@@ -746,36 +762,27 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<At
             })
         }));
 
-        // If cancelled (a newer request arrived while we were searching), skip final notification.
-        if cancel_ref.load(Ordering::SeqCst) {
-            continue;
-        }
-
+        // Always emit a terminal event — even on cancellation — so the Lua
+        // coroutine for this generation unwinds and is collected. Any stale
+        // batches still in the queue will be filtered by the per-generation
+        // dispatcher on the Lua side.
         let total = total_so_far.load(Ordering::Relaxed);
-        match result {
-            Ok(Ok(())) => {
-                search_result_queue()
-                    .lock()
-                    .push_back(SearchResultMessage::Done { generation, total });
+        let terminal = if cancel_ref.load(Ordering::SeqCst) {
+            SearchResultMessage::Done { generation, total }
+        } else {
+            match result {
+                Ok(Ok(())) => SearchResultMessage::Done { generation, total },
+                Ok(Err(e)) => SearchResultMessage::Error {
+                    generation,
+                    error: e,
+                },
+                Err(_) => SearchResultMessage::Error {
+                    generation,
+                    error: "Panic during search".into(),
+                },
             }
-            Ok(Err(e)) => {
-                search_result_queue()
-                    .lock()
-                    .push_back(SearchResultMessage::Error {
-                        generation,
-                        error: e,
-                    });
-            }
-            Err(_) => {
-                search_result_queue()
-                    .lock()
-                    .push_back(SearchResultMessage::Error {
-                        generation,
-                        error: "Panic during search".into(),
-                    });
-            }
-        }
-
+        };
+        search_result_queue().lock().push_back(terminal);
         notify_main_thread();
     }
 }

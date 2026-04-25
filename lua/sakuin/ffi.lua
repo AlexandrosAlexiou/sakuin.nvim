@@ -73,8 +73,12 @@ local function get_lib()
 	return lib
 end
 
----@type fun(msg_type: string, generation: number, results: table|nil, error: string|nil, total: number|nil)|nil
-local lua_search_callback = nil
+--- Per-generation search callbacks. Each in-flight finder coroutine
+--- registers itself under its own generation; the dispatcher routes
+--- messages by generation and unregisters on terminal events so stale
+--- coroutines unwind and are collected.
+---@type table<number, fun(msg_type: string, results: table|nil, error: string|nil, total: number|nil)>
+local search_callbacks = {}
 
 ---@type fun(event: table)|nil
 local lua_indexing_callback = nil
@@ -120,6 +124,8 @@ local function on_async_notification()
 	end
 
 	-- The worker pushes batch/done/error messages; we may have multiple per wake-up.
+	-- Dispatch by generation so stale-generation coroutines still receive their
+	-- terminal Done/Error and unwind.
 	while true do
 		local raw = lib.sakuin_search_take_result()
 		if raw == nil then
@@ -131,19 +137,20 @@ local function on_async_notification()
 
 		local ok, msg = pcall(vim.json.decode, json_str)
 		if not ok then
-			if lua_search_callback then
-				lua_search_callback("error", 0, nil, "Failed to decode search message: " .. tostring(msg))
-			end
-		elseif lua_search_callback then
-			local gen = msg.generation
-			local msg_type = msg.type
-
-			if msg_type == "batch" then
-				lua_search_callback("batch", gen, msg.results, nil, msg.total_so_far)
-			elseif msg_type == "done" then
-				lua_search_callback("done", gen, nil, nil, msg.total)
-			elseif msg_type == "error" then
-				lua_search_callback("error", gen, nil, msg.error)
+			-- Decode failed — no generation to dispatch on; drop.
+		else
+			local cb = search_callbacks[msg.generation]
+			if cb then
+				local msg_type = msg.type
+				if msg_type == "batch" then
+					cb("batch", msg.results, nil, msg.total_so_far)
+				elseif msg_type == "done" then
+					search_callbacks[msg.generation] = nil
+					cb("done", nil, nil, msg.total)
+				elseif msg_type == "error" then
+					search_callbacks[msg.generation] = nil
+					cb("error", nil, msg.error, nil)
+				end
 			end
 		end
 	end
@@ -246,16 +253,31 @@ function M.set_indexing_callback(callback)
 	lua_indexing_callback = callback
 end
 
---- Set the Lua callback for async search results (streaming).
+--- Register a per-generation Lua callback for streaming async search results.
 ---
---- The callback receives: (msg_type, generation, results_or_nil, error_or_nil, total_or_nil)
+--- The callback receives: (msg_type, results_or_nil, error_or_nil, total_or_nil)
 ---   - msg_type "batch": results is an array of matches, total is cumulative count so far
 ---   - msg_type "done": results is nil, total is final count
 ---   - msg_type "error": error is the error message
+---
+--- The dispatcher auto-unregisters on `done` or `error`; callers may also
+--- call `unregister_search_callback` explicitly for early teardown (e.g. on
+--- picker close before any terminal event has arrived).
 --- It is always called on the main Neovim thread (via uv_async + vim.schedule).
----@param callback fun(msg_type: string, generation: number, results: table|nil, error: string|nil)|nil
-function M.set_search_callback(callback)
-	lua_search_callback = callback
+---@param generation number
+---@param callback fun(msg_type: string, results: table|nil, error: string|nil, total: number|nil)
+function M.register_search_callback(generation, callback)
+	search_callbacks[generation] = callback
+end
+
+---@param generation number
+function M.unregister_search_callback(generation)
+	search_callbacks[generation] = nil
+end
+
+--- Drop all in-flight search callbacks. Defensive cleanup for picker close.
+function M.clear_search_callbacks()
+	search_callbacks = {}
 end
 
 --- Submit a search query to the persistent worker thread (non-blocking).
