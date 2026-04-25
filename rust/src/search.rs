@@ -62,7 +62,8 @@ where
         return Ok(());
     }
 
-    let needle = query_str.to_lowercase();
+    // ASCII-only case folding — non-ASCII keeps its original casing.
+    let needle = query_str.to_ascii_lowercase();
 
     let body_field = params.schema.get_field(FIELD_BODY).unwrap();
     let path_field = params.schema.get_field(FIELD_PATH).unwrap();
@@ -108,10 +109,12 @@ where
     if num_docs == 0 {
         return Ok(());
     }
+
+    let candidate_limit = limit.min(num_docs).max(1);
     let top_docs = searcher
         .search_with_executor(
             &tantivy_query,
-            &TopDocs::with_limit(num_docs).order_by_score(),
+            &TopDocs::with_limit(candidate_limit).order_by_score(),
             params.executor,
             EnableScoring::enabled_from_statistics_provider(&searcher, &searcher),
         )
@@ -155,7 +158,7 @@ where
                     if !abs_path.exists() {
                         return;
                     }
-                    if rel_path.to_lowercase().contains(needle_clone.as_str()) {
+                    if contains_ascii_ci(rel_path, &needle_clone) {
                         total_clone.fetch_add(1, Ordering::Relaxed);
                         vec![SearchResult {
                             path: rel_path.clone(),
@@ -214,13 +217,16 @@ fn find_matching_lines(
     };
 
     let mut matches = Vec::new();
+    let mut lowered = String::new();
 
     for (line_idx, line) in contents.lines().enumerate() {
         if line_idx & 0x1FF == 0 && cancelled.load(Ordering::Relaxed) {
             return matches;
         }
-        // Lowercase per line: avoids allocating a second copy of the entire file.
-        if let Some(col) = line.to_lowercase().find(needle) {
+        lowered.clear();
+        lowered.push_str(line);
+        lowered.make_ascii_lowercase();
+        if let Some(col) = lowered.find(needle) {
             matches.push((
                 (line_idx + 1) as u32,
                 (col + 1) as u32,
@@ -230,6 +236,20 @@ fn find_matching_lines(
     }
 
     matches
+}
+
+/// `needle` must already be ASCII-lowercased.
+fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
 }
 
 /// Split a string into contiguous alphanumeric chunks (for Tantivy index lookups).
