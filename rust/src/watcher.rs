@@ -172,11 +172,13 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
     log::info!("Git operation detected — computing changes via libgit2");
 
     // Try a targeted HEAD diff first (cheaper for branch switches).
-    let changes = git::detect_head_change(project_root, last_head_oid.as_deref())
-        .or_else(|e| {
-            log::warn!("HEAD-based diff failed ({}), falling back to full working tree diff", e);
-            git::detect_changes(project_root)
-        });
+    let changes = git::detect_head_change(project_root, last_head_oid.as_deref()).or_else(|e| {
+        log::warn!(
+            "HEAD-based diff failed ({}), falling back to full working tree diff",
+            e
+        );
+        git::detect_changes(project_root)
+    });
 
     // Update tracked HEAD for next time.
     *last_head_oid = git::current_head_oid(project_root);
@@ -197,9 +199,7 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
             for p in &changes.deleted {
                 log::debug!("  git op remove: {:?}", p);
             }
-            if let Err(e) =
-                crate::state::batch_update_files(&changes.deleted, &changes.modified)
-            {
+            if let Err(e) = crate::state::batch_update_files(&changes.deleted, &changes.modified) {
                 log::warn!("Git-triggered batch update failed: {}", e);
             }
         }
