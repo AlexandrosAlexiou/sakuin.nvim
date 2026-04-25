@@ -1216,11 +1216,13 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
     );
 
     // Ensure mtime differs from build time (git checkout can preserve mtime)
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_secs(1));
 
     // Touch the files to guarantee mtime change (git checkout may reuse mtime)
-    let now_content = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-    fs::write(root.join("src/lib.rs"), &now_content).unwrap();
+    let lib_content = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    fs::write(root.join("src/lib.rs"), &lib_content).unwrap();
+    let extra_content = fs::read_to_string(root.join("src/extra.rs")).unwrap();
+    fs::write(root.join("src/extra.rs"), &extra_content).unwrap();
 
     // Incremental update should pick up changes from the branch switch
     let rc = sakuin::sakuin_update_index();

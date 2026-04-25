@@ -23,6 +23,13 @@ M.defaults = {
   -- When false, gitignored files are also indexed.
   respect_gitignore = true,
 
+  -- Log level for the file logger: "error", "warn", "info", "debug", "trace", "off".
+  -- Use :SakuinLogs to view logs, or :SakuinLogs debug to change level at runtime.
+  log_level = "info",
+
+  -- Path to the log file. Logs are appended here and viewable via :SakuinLogs.
+  log_file = vim.fn.stdpath("state") .. "/sakuin.log",
+
   search = {
     -- 0 = unlimited. Stops search early once enough results exist.
     limit = 10000,

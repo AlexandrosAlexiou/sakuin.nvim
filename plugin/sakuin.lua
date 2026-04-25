@@ -130,3 +130,14 @@ vim.api.nvim_create_user_command("SakuinStats", function()
 end, {
   desc = "Show index statistics",
 })
+
+vim.api.nvim_create_user_command("SakuinLogs", function(opts)
+  local level = (opts.args and opts.args ~= "") and opts.args or nil
+  require("sakuin.logs").open({ level = level })
+end, {
+  nargs = "?",
+  complete = function()
+    return { "error", "warn", "info", "debug", "trace", "off" }
+  end,
+  desc = "Open sakuin log viewer (optional: set log level, e.g. :SakuinLogs debug)",
+})
