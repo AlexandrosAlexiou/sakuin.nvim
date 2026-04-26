@@ -133,17 +133,17 @@ local function on_async_notification()
 		lib.sakuin_free_string(raw)
 
 		local ok, msg = pcall(vim.json.decode, json_str)
-		local cb = ok and search_callbacks[msg.generation]
-		if cb then
+		local callback = ok and search_callbacks[msg.generation]
+		if callback then
 			local msg_type = msg.type
 			if msg_type == "batch" then
-				cb("batch", msg.results, nil, msg.total_so_far)
+				callback("batch", msg.results, nil, msg.total_so_far)
 			elseif msg_type == "done" then
 				search_callbacks[msg.generation] = nil
-				cb("done", nil, nil, msg.total)
+				callback("done", nil, nil, msg.total)
 			elseif msg_type == "error" then
 				search_callbacks[msg.generation] = nil
-				cb("error", nil, msg.error, nil)
+				callback("error", nil, msg.error, nil)
 			end
 		end
 	end
