@@ -31,7 +31,7 @@ function M.sakuin(opts)
 	---@diagnostic disable-next-line: unused-local
 	local function finder(_fopts, ctx)
 		---@async
-		return function(cb)
+		return function(callback)
 			local search = ctx.filter and ctx.filter.search or ""
 			if search == "" then
 				return
@@ -94,7 +94,7 @@ function M.sakuin(opts)
 					local items = pending_items
 					pending_items = {}
 					for _, item in ipairs(items) do
-						cb(item)
+						callback(item)
 					end
 				end
 
@@ -104,7 +104,7 @@ function M.sakuin(opts)
 			end
 
 			for _, item in ipairs(pending_items) do
-				cb(item)
+				callback(item)
 			end
 
 			-- Belt-and-braces: dispatcher already removed us on done/error,
