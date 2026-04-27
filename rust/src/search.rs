@@ -111,7 +111,7 @@ where
         return Ok(());
     }
 
-    let candidate_limit = limit.min(num_docs).max(1);
+    let candidate_limit = num_docs.max(1);
     let top_docs = searcher
         .search_with_executor(
             &tantivy_query,
@@ -554,6 +554,48 @@ mod tests {
         assert!(
             results.is_empty(),
             "Expected no results for a deleted file, got: {:?}",
+            results.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_rare_substring_survives_bm25_candidate_cap() {
+        // Regression: the picker passes a non-MAX limit; capping `TopDocs` by
+        // that limit drops rare-substring docs (one `return "Resumable"`) under
+        // BM25 noise (many `return Result::Ok(...)`) before line scanning.
+        let mut files = vec![("needle.rs".into(), "return \"Resumable\";\n".into())];
+        for i in 0..50 {
+            files.push((
+                format!("noise_{i}.rs"),
+                "return Result::Ok(());\n".repeat(200),
+            ));
+        }
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c): &(String, String)| (p.as_str(), c.as_str()))
+            .collect();
+        let (reader, schema, dir) = setup_test_index(&refs);
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let executor = Executor::single_thread();
+        let mut results = Vec::new();
+        search_streaming(
+            &SearchParams {
+                reader: &reader,
+                schema: &schema,
+                project_root: dir.path(),
+                query_str: "return \"Resu",
+                cancelled: &cancelled,
+                executor: &executor,
+            },
+            30, // < noise count, so a limit-bounded TopDocs would drop the needle
+            |b| results.extend(b),
+        )
+        .unwrap();
+
+        assert!(
+            results.iter().any(|r| r.path == "needle.rs" && r.line != 0),
+            "needle.rs missing from {:?}",
             results.iter().map(|r| &r.path).collect::<Vec<_>>()
         );
     }
