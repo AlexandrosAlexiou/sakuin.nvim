@@ -1,5 +1,7 @@
+use std::io::{self, Write};
+
 use clap::{Parser, Subcommand};
-use sakuin::internal::{build_index, do_search, init, shutdown, stats, update_index};
+use sakuin::internal::{build_index, do_search_streaming, init, shutdown, stats, update_index};
 
 #[derive(Parser)]
 #[command(
@@ -100,19 +102,28 @@ fn main() {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             let t = std::time::Instant::now();
-            match do_search(&query) {
-                Ok(mut results) => {
-                    let elapsed = t.elapsed().as_millis();
-                    if limit > 0 {
-                        results.truncate(limit);
+            let mut total: usize = 0;
+            let mut printed: usize = 0;
+            let stdout = io::stdout();
+            let res = do_search_streaming(&query, |batch| {
+                total += batch.len();
+                let mut out = stdout.lock();
+                for r in &batch {
+                    if limit > 0 && printed >= limit {
+                        break;
                     }
-                    if results.is_empty() {
+                    let _ = writeln!(out, "{}:{}:{}  {}", r.path, r.line, r.col, r.snippet.trim());
+                    printed += 1;
+                }
+                let _ = out.flush();
+            });
+            let elapsed = t.elapsed().as_millis();
+            match res {
+                Ok(()) => {
+                    if total == 0 {
                         println!("No results for {:?} ({elapsed}ms)", query);
                     } else {
-                        for r in &results {
-                            println!("{}:{}:{}  {}", r.path, r.line, r.col, r.snippet.trim());
-                        }
-                        println!("({} result(s), {elapsed}ms)", results.len());
+                        println!("({} result(s), {elapsed}ms)", total);
                     }
                 }
                 Err(e) => die(&format!("search: {e}")),

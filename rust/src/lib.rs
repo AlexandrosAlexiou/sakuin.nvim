@@ -275,19 +275,22 @@ mod ffi_exports {
                     ffi::set_last_error(e);
                     std::ptr::null()
                 }
-                Ok(q) => match state::do_search(q) {
-                    Ok(results) => match serde_json::to_string(&results) {
-                        Ok(json) => ffi::str_to_c(&json),
+                Ok(q) => {
+                    let mut results = Vec::new();
+                    match state::do_search_streaming(q, |batch| results.extend(batch)) {
+                        Ok(()) => match serde_json::to_string(&results) {
+                            Ok(json) => ffi::str_to_c(&json),
+                            Err(e) => {
+                                ffi::set_last_error(format!("JSON serialization failed: {}", e));
+                                std::ptr::null()
+                            }
+                        },
                         Err(e) => {
-                            ffi::set_last_error(format!("JSON serialization failed: {}", e));
+                            ffi::set_last_error(e);
                             std::ptr::null()
                         }
-                    },
-                    Err(e) => {
-                        ffi::set_last_error(e);
-                        std::ptr::null()
                     }
-                },
+                }
             }
         });
 
@@ -384,6 +387,6 @@ pub use ffi_exports::*;
 /// Not part of the C FFI surface exposed to Neovim.
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::state::{build_index, do_search, init, shutdown, stats, update_index};
+    pub use crate::state::{build_index, do_search_streaming, init, shutdown, stats, update_index};
     pub use crate::types::{IndexStats, SakuinConfig, SearchResult};
 }

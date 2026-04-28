@@ -503,18 +503,31 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     Ok((added, updated, removed))
 }
 
-pub fn do_search(query: &str) -> Result<Vec<SearchResult>, String> {
+/// Run a search against the global engine state, invoking `on_batch` from the
+/// calling thread each time a chunk of results is ready. Callers that want the
+/// full set can collect into a `Vec` themselves.
+pub fn do_search_streaming<F>(query: &str, on_batch: F) -> Result<(), String>
+where
+    F: FnMut(Vec<SearchResult>),
+{
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
     let cancelled = Arc::new(AtomicBool::new(false));
-    search::search(
-        &state.reader,
-        &state.schema,
-        &state.project_root,
-        query,
-        &cancelled,
-    )
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
+        .unwrap_or_else(|_| Executor::single_thread());
+    let params = search::SearchParams {
+        reader: &state.reader,
+        schema: &state.schema,
+        project_root: &state.project_root,
+        query_str: query,
+        cancelled: &cancelled,
+        executor: &executor,
+    };
+    search::search_streaming(&params, usize::MAX, on_batch)
 }
 
 // ============================================================================
