@@ -23,33 +23,6 @@ pub struct SearchParams<'a> {
     pub executor: &'a Executor,
 }
 
-pub fn search(
-    reader: &IndexReader,
-    schema: &Schema,
-    project_root: &Path,
-    query_str: &str,
-    cancelled: &Arc<AtomicBool>,
-) -> Result<Vec<SearchResult>, String> {
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
-        .unwrap_or_else(|_| Executor::single_thread());
-    let params = SearchParams {
-        reader,
-        schema,
-        project_root,
-        query_str,
-        cancelled,
-        executor: &executor,
-    };
-    let mut all_results = Vec::new();
-    search_streaming(&params, usize::MAX, |batch| {
-        all_results.extend(batch);
-    })?;
-    Ok(all_results)
-}
-
 pub fn search_streaming<F>(
     params: &SearchParams,
     limit: usize,
@@ -336,7 +309,22 @@ mod tests {
         query: &str,
     ) -> Vec<SearchResult> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        search(reader, schema, project_root, query, &cancelled).unwrap()
+        let executor = Executor::single_thread();
+        let mut results = Vec::new();
+        search_streaming(
+            &SearchParams {
+                reader,
+                schema,
+                project_root,
+                query_str: query,
+                cancelled: &cancelled,
+                executor: &executor,
+            },
+            usize::MAX,
+            |b| results.extend(b),
+        )
+        .unwrap();
+        results
     }
 
     #[test]
