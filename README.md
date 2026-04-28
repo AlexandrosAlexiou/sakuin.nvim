@@ -1,8 +1,8 @@
 # sakuin.nvim (索引)
 
-Full-text search for Neovim built for large codebases. Powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
+Fast full-text search for Neovim, powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
 
-A fast, indexed alternative to live grep for large codebases. Builds a persistent full-text index so queries return in milliseconds across 100,000+ files, streamed into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
+Working in massive codebases, the usual live-grep tools start to drag once a project gets big enough. Sakuin builds a persistent index up front so queries come back in milliseconds, even across hundreds of thousands of files, and streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
 
 ## Requirements
 
@@ -26,7 +26,7 @@ A fast, indexed alternative to live grep for large codebases. Builds a persisten
 
 ## Getting Started
 
-1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written to `.sakuin/` at your project root — add it to your `.gitignore`.
+1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written to `.sakuin/` at your project root(add it to your `.gitignore`, or `.git/info/exclude`).
 2. Open the search picker with `<leader>si` and start typing. Results stream in as you type.
 3. From that point on, the index is maintained automatically. On startup, changed files are synced. A filesystem watcher keeps it current while you work.
 
@@ -115,6 +115,12 @@ require("sakuin").setup({
 ```vim
 :checkhealth sakuin
 ```
+
+## Philosophy
+
+![YAGNI](.github/yagni.jpeg)
+
+> _Credit: [monkeyuser.com](https://monkeyuser.com)_
 
 ## License
 
