@@ -1,7 +1,6 @@
-use std::io::{self, Write};
-
 use clap::{Parser, Subcommand};
 use sakuin::internal::{build_index, do_search_streaming, init, shutdown, stats, update_index};
+use std::io::{stdout, Write};
 
 #[derive(Parser)]
 #[command(
@@ -37,9 +36,6 @@ enum Command {
         query: String,
         #[arg(long)]
         index_dir: Option<String>,
-        /// Maximum results to show (0 = unlimited).
-        #[arg(long, default_value = "20")]
-        limit: usize,
     },
 
     /// Print index statistics.
@@ -97,23 +93,17 @@ fn main() {
             root,
             query,
             index_dir: idx,
-            limit,
         } => {
             let idx = index_dir(&root, idx.as_deref());
             must_init(&root, &idx);
             let t = std::time::Instant::now();
             let mut total: usize = 0;
-            let mut printed: usize = 0;
-            let stdout = io::stdout();
+            let stdout = stdout();
             let res = do_search_streaming(&query, |batch| {
                 total += batch.len();
                 let mut out = stdout.lock();
                 for r in &batch {
-                    if limit > 0 && printed >= limit {
-                        break;
-                    }
                     let _ = writeln!(out, "{}:{}:{}  {}", r.path, r.line, r.col, r.snippet.trim());
-                    printed += 1;
                 }
                 let _ = out.flush();
             });
