@@ -2,7 +2,7 @@
 
 Fast full-text search for Neovim, powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
 
-Working in massive codebases, the usual live-grep tools start to drag once a project gets big enough. Sakuin builds a persistent index up front so queries come back in milliseconds, even across hundreds of thousands of files, and streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
+Working on massive codebases, the usual live-grep tools start to drag once a project gets big enough. Sakuin builds a persistent index up front so queries come back in milliseconds, even across hundreds of thousands of files, and streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
 
 ## Requirements
 
@@ -117,6 +117,7 @@ require("sakuin").setup({
 ```
 
 ## Philosophy
+This project isn’t something most developers will need, but I find it useful in certain situations. I wanted to build something interesting and use it as an opportunity to learn a few things along the way.
 
 ![YAGNI](.github/yagni.jpeg)
 
