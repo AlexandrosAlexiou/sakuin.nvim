@@ -162,12 +162,8 @@ function M.open(opts)
 	vim.api.nvim_win_set_height(0, 15)
 
 	local buf_opts = { buffer = log_bufnr, silent = true }
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, buf_opts)
-	vim.keymap.set("n", "R", function()
-		refresh()
-	end, buf_opts)
+	vim.keymap.set("n", "q", M.close, buf_opts)
+	vim.keymap.set("n", "R", refresh, buf_opts)
 	vim.keymap.set("n", "C", function()
 		local ok, ffi_mod = pcall(require, "sakuin.ffi")
 		if ok and ffi_mod.is_loaded() then

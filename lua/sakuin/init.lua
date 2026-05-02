@@ -1,7 +1,5 @@
 local M = {}
 
-local initialized = false
-
 local function start_watcher_if_enabled(ffi_mod, config)
 	if config.watch then
 		vim.schedule(function()
@@ -77,7 +75,6 @@ local function init_engine(config)
 		return nil
 	end
 
-	initialized = true
 	return ffi_mod
 end
 
@@ -154,16 +151,6 @@ function M.setup(opts)
 	vim.schedule(function()
 		deferred_startup(config)
 	end)
-end
-
----@param query string
----@return table|nil
----@return string|nil
-function M.search(query)
-	if not initialized then
-		return nil, "sakuin is not initialized yet"
-	end
-	return require("sakuin.ffi").search(query)
 end
 
 -- Lazy-inits the engine on first :SakuinBuild — startup skips init when there's

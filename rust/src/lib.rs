@@ -1,8 +1,3 @@
-//! sakuin — Indexed full-text search engine for Neovim.
-//!
-//! This crate produces a C-compatible shared library (cdylib) that Neovim's
-//! LuaJIT FFI loads at runtime.
-
 mod ffi;
 pub(crate) mod git;
 mod index;
@@ -24,10 +19,6 @@ use std::os::raw::{c_char, c_void};
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 mod ffi_exports {
     use super::*;
-
-    // ========================================================================
-    // Lifecycle
-    // ========================================================================
 
     /// Initialize the sakuin engine.
     ///
@@ -60,31 +51,11 @@ mod ffi_exports {
         state::shutdown();
     }
 
-    // ========================================================================
-    // Indexing
-    // ========================================================================
-
-    /// Full index rebuild: clear existing index and re-index all files.
-    ///
-    /// Returns 0 on success, -1 on error.
-    #[no_mangle]
-    pub extern "C" fn sakuin_build_index() -> i32 {
-        ffi::ffi_try(|| state::build_index().map(|_| ()))
-    }
-
-    /// Incremental index update: re-index changed files, remove deleted files.
-    ///
-    /// Returns 0 on success, -1 on error.
-    #[no_mangle]
-    pub extern "C" fn sakuin_update_index() -> i32 {
-        ffi::ffi_try(|| state::update_index().map(|_| ()))
-    }
-
     /// Spawn a full index rebuild on a background thread.
     ///
-    /// Returns immediately. Progress is available via `sakuin_get_progress`.
-    /// Completion/error is pushed via `uv_async_send` → `sakuin_indexing_take_event`.
-    /// Returns 0 if the background job was spawned, -1 on error.
+    /// Returns immediately. Completion/error is pushed via `uv_async_send` →
+    /// `sakuin_indexing_take_event`. Returns 0 if the background job was
+    /// spawned, -1 on error.
     #[no_mangle]
     pub extern "C" fn sakuin_build_index_async() -> i32 {
         ffi::ffi_try(|| {
@@ -163,25 +134,6 @@ mod ffi_exports {
         }
     }
 
-    /// Returns NULL on error. Caller MUST free with `sakuin_free_string`.
-    #[no_mangle]
-    pub extern "C" fn sakuin_get_progress() -> *const c_char {
-        let prog = state::progress();
-        let total = prog.total.load(std::sync::atomic::Ordering::Relaxed);
-        let done = prog.done.load(std::sync::atomic::Ordering::Relaxed);
-        let status = match prog.status.load(std::sync::atomic::Ordering::SeqCst) {
-            state::PROGRESS_RUNNING => "running",
-            state::PROGRESS_DONE => "done",
-            state::PROGRESS_ERROR => "error",
-            _ => "idle",
-        };
-        let json = format!(
-            r#"{{"total":{},"done":{},"status":"{}"}}"#,
-            total, done, status
-        );
-        ffi::str_to_c(&json)
-    }
-
     /// Start the background filesystem watcher.
     ///
     /// Returns 0 on success, -1 on error.
@@ -195,10 +147,6 @@ mod ffi_exports {
     pub extern "C" fn sakuin_stop_watcher() {
         state::stop_watcher();
     }
-
-    // ========================================================================
-    // Search — result-slot + uv_async notification
-    // ========================================================================
 
     /// Register the libuv async handle used to notify the main Neovim thread
     /// when search results are ready.
@@ -261,52 +209,6 @@ mod ffi_exports {
         state::search_cancel();
     }
 
-    /// Execute a full-text search query (synchronous — blocks the caller).
-    ///
-    /// Returns a JSON string of results.
-    /// Returns NULL on error (retrieve message with `sakuin_last_error`).
-    /// The caller MUST free the returned string with `sakuin_free_string`.
-    #[no_mangle]
-    pub extern "C" fn sakuin_search(query: *const c_char) -> *const c_char {
-        let result = std::panic::catch_unwind(|| {
-            let query_str = unsafe { ffi::cstr_to_str(query) };
-            match query_str {
-                Err(e) => {
-                    ffi::set_last_error(e);
-                    std::ptr::null()
-                }
-                Ok(q) => {
-                    let mut results = Vec::new();
-                    match state::do_search_streaming(q, |batch| results.extend(batch)) {
-                        Ok(()) => match serde_json::to_string(&results) {
-                            Ok(json) => ffi::str_to_c(&json),
-                            Err(e) => {
-                                ffi::set_last_error(format!("JSON serialization failed: {}", e));
-                                std::ptr::null()
-                            }
-                        },
-                        Err(e) => {
-                            ffi::set_last_error(e);
-                            std::ptr::null()
-                        }
-                    }
-                }
-            }
-        });
-
-        match result {
-            Ok(ptr) => ptr,
-            Err(_) => {
-                ffi::set_last_error("Panic during search".into());
-                std::ptr::null()
-            }
-        }
-    }
-
-    // ========================================================================
-    // Info
-    // ========================================================================
-
     /// Get index statistics as JSON.
     ///
     /// Returns NULL on error. Caller MUST free with `sakuin_free_string`.
@@ -339,10 +241,6 @@ mod ffi_exports {
         }
     }
 
-    // ========================================================================
-    // Memory management
-    // ========================================================================
-
     /// Free a string previously returned by any sakuin function.
     ///
     /// Passing NULL is a no-op.
@@ -352,10 +250,6 @@ mod ffi_exports {
             ffi::free_c_string(ptr);
         }
     }
-
-    // ========================================================================
-    // Logging
-    // ========================================================================
 
     /// Change the log level at runtime.
     ///
@@ -383,10 +277,13 @@ mod ffi_exports {
 // Re-export FFI functions at crate root for integration tests.
 pub use ffi_exports::*;
 
-/// Internal API for the debug CLI binary.
+/// Internal API for the debug CLI binary and integration tests.
 /// Not part of the C FFI surface exposed to Neovim.
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::state::{build_index, do_search_streaming, init, shutdown, stats, update_index};
+    pub use crate::state::{
+        build_index, do_search_streaming, init, progress, shutdown, stats, update_index,
+        PROGRESS_DONE, PROGRESS_ERROR, PROGRESS_RUNNING,
+    };
     pub use crate::types::{IndexStats, SakuinConfig, SearchResult};
 }

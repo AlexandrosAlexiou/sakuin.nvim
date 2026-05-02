@@ -53,30 +53,20 @@ end, {
 })
 
 vim.api.nvim_create_user_command("SakuinBuild", function()
-  local ok, sakuin = pcall(require, "sakuin")
-  if not ok then
-    vim.notify("[sakuin] Not initialized. Call require('sakuin').setup() first.", vim.log.levels.ERROR)
-    return
-  end
-  sakuin.async_index("build")
+  require("sakuin").async_index("build")
 end, {
   desc = "Full index rebuild (async with progress)",
 })
 
 vim.api.nvim_create_user_command("SakuinUpdate", function()
-  local ok, sakuin = pcall(require, "sakuin")
-  if not ok then
-    vim.notify("[sakuin] Not initialized. Call require('sakuin').setup() first.", vim.log.levels.ERROR)
-    return
-  end
-  sakuin.async_index("update")
+  require("sakuin").async_index("update")
 end, {
   desc = "Incremental index update (async with progress)",
 })
 
 vim.api.nvim_create_user_command("SakuinStats", function()
-  local ok, ffi_mod = pcall(require, "sakuin.ffi")
-  if not ok or not ffi_mod.is_loaded() then
+  local ffi_mod = require("sakuin.ffi")
+  if not ffi_mod.is_loaded() then
     vim.notify("[sakuin] Not initialized. Call require('sakuin').setup() first.", vim.log.levels.ERROR)
     return
   end
