@@ -110,8 +110,7 @@ where
         .name("sakuin-scan".into())
         .spawn(move || {
             top_docs.into_par_iter().for_each(|(_score, doc_address)| {
-                if cancelled.load(Ordering::Relaxed)
-                    || total_clone.load(Ordering::Relaxed) >= limit
+                if cancelled.load(Ordering::Relaxed) || total_clone.load(Ordering::Relaxed) >= limit
                 {
                     return;
                 }

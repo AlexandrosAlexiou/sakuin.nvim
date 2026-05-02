@@ -506,12 +506,10 @@ struct AsyncNotifier {
     send_fn: unsafe extern "C" fn(*mut c_void) -> i32,
 }
 
-// Safety: The uv_async_t handle is allocated by libuv and lives for the
-// duration of the Neovim process. `uv_async_send` is explicitly documented
-// as the only libuv function that is thread-safe. We only call `send_fn(handle)`
-// from the worker thread, which is its intended use.
+// Safety: Raw pointers aren't Send, but we need it for the static Mutex.
+// The uv_async_t handle lives for the Neovim process lifetime, and
+// uv_async_send is the only thread-safe libuv function.
 unsafe impl Send for AsyncNotifier {}
-unsafe impl Sync for AsyncNotifier {}
 
 static ASYNC_NOTIFIER: OnceLock<Mutex<Option<AsyncNotifier>>> = OnceLock::new();
 
