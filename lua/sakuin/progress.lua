@@ -1,11 +1,7 @@
---- sakuin.nvim — Indexing state and simple vim.notify progress.
-
 local M = {}
 
----@type boolean
 M.is_indexing = false
 
----@return boolean
 local function is_enabled()
 	local config = require("sakuin.config").get()
 	return not config.progress or config.progress.enabled ~= false
@@ -27,11 +23,11 @@ function M.done(message)
 	end
 end
 
+-- Errors notify regardless of progress.enabled.
 ---@param label string
 ---@param err string
 function M.fail(label, err)
 	M.is_indexing = false
-	-- Always notify on errors regardless of enabled setting
 	vim.notify("[sakuin] " .. label .. " failed: " .. err, vim.log.levels.ERROR)
 end
 

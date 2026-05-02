@@ -73,10 +73,8 @@ local function get_lib()
 	return lib
 end
 
---- Per-generation search callbacks. Each in-flight finder coroutine
---- registers itself under its own generation; the dispatcher routes
---- messages by generation and unregisters on terminal events so stale
---- coroutines unwind and are collected.
+-- Per-generation search callbacks. Dispatcher routes messages by generation and
+-- unregisters on terminal events so stale coroutines unwind and are collected.
 ---@type table<number, fun(msg_type: string, results: table|nil, error: string|nil, total: number|nil)>
 local search_callbacks = {}
 
@@ -87,8 +85,6 @@ local async_handle = nil -- kept alive to prevent GC
 
 ---@return string
 local function resolve_lib_path()
-	-- Get the plugin root directory from this file's location:
-	-- lua/sakuin/ffi.lua -> ../../ -> plugin root
 	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading @
 	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h")
 
@@ -237,26 +233,19 @@ function M.stop_watcher()
 	end
 end
 
---- Set the Lua callback for indexing completion events.
----
---- The callback receives a table: { status="done"|"error", total, done, error? }
---- It is always called on the main Neovim thread (via uv_async + vim.schedule).
+-- Callbacks fire on the main Neovim thread (via uv_async + vim.schedule).
+-- Indexing event shape: { status="done"|"error", total, done, error? }.
 ---@param callback fun(event: table)|nil
 function M.set_indexing_callback(callback)
 	lua_indexing_callback = callback
 end
 
---- Register a per-generation Lua callback for streaming async search results.
----
---- The callback receives: (msg_type, results_or_nil, error_or_nil, total_or_nil)
----   - msg_type "batch": results is an array of matches, total is cumulative count so far
----   - msg_type "done": results is nil, total is final count
----   - msg_type "error": error is the error message
----
---- The dispatcher auto-unregisters on `done` or `error`; callers may also
---- call `unregister_search_callback` explicitly for early teardown (e.g. on
---- picker close before any terminal event has arrived).
---- It is always called on the main Neovim thread (via uv_async + vim.schedule).
+-- Search callback args: (msg_type, results_or_nil, error_or_nil, total_or_nil).
+-- "batch": results = matches, total = cumulative count so far.
+-- "done":  results = nil,     total = final count.
+-- "error": error  = message.
+-- Dispatcher auto-unregisters on done/error; callers may unregister early
+-- (e.g. picker close before any terminal event arrives).
 ---@param generation number
 ---@param callback fun(msg_type: string, results: table|nil, error: string|nil, total: number|nil)
 function M.register_search_callback(generation, callback)
@@ -268,20 +257,17 @@ function M.unregister_search_callback(generation)
 	search_callbacks[generation] = nil
 end
 
---- Drop all in-flight search callbacks. Defensive cleanup for picker close.
 function M.clear_search_callbacks()
 	search_callbacks = {}
 end
 
---- Submit a search query to the persistent worker thread (non-blocking).
----
---- Results are delivered as streaming batches via the registered callback.
---- Any in-flight search is automatically cancelled.
----@param query string The search query
----@param generation number Monotonically increasing generation counter
----@param limit? number Maximum total results (0 or nil = unlimited)
+-- Submit a search to the persistent worker thread. Any in-flight search is
+-- automatically cancelled. Results stream back via the registered callback.
+---@param query string
+---@param generation number
+---@param limit? number 0 or nil = unlimited
 ---@return number rc 0 on success, -1 on error
----@return string|nil error Error message on failure
+---@return string|nil error
 function M.search_submit(query, generation, limit)
 	local rc = get_lib().sakuin_search_submit(query, generation, limit or 0)
 	if tonumber(rc) ~= 0 then
@@ -294,7 +280,7 @@ function M.search_cancel()
 	get_lib().sakuin_search_cancel()
 end
 
---- Synchronous search — blocks the caller.
+-- Synchronous search — blocks the caller.
 ---@param query string
 ---@return table|nil results
 ---@return string|nil error
@@ -379,15 +365,13 @@ function M.last_error()
 	return msg
 end
 
---- Change the log level at runtime.
----@param level string One of "error", "warn", "info", "debug", "trace", "off"
----@return boolean success
+---@param level "error"|"warn"|"info"|"debug"|"trace"|"off"
+---@return boolean
 function M.set_log_level(level)
 	local rc = get_lib().sakuin_set_log_level(level)
 	return tonumber(rc) == 0
 end
 
---- Clear the log file contents.
 function M.clear_logs()
 	get_lib().sakuin_clear_logs()
 end
