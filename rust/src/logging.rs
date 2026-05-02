@@ -37,7 +37,6 @@ impl log::Log for SakuinLogger {
         let secs = timestamp as i64;
         let ms = ((timestamp - secs as f64) * 1000.0) as u32;
 
-        // Use a basic UTC-ish format (from unix timestamp)
         let level = match record.level() {
             log::Level::Error => "ERROR",
             log::Level::Warn => "WARN ",
@@ -49,8 +48,6 @@ impl log::Log for SakuinLogger {
         let target = record.target();
         let message = format!("{}", record.args());
 
-        // Format timestamp as local time
-        // We'll use a simple approach: seconds + ms
         let line = format!(
             "{} {level} [{target}] {message}\n",
             format_timestamp(secs, ms),
@@ -72,8 +69,7 @@ impl log::Log for SakuinLogger {
 }
 
 fn format_timestamp(secs: i64, ms: u32) -> String {
-    // Convert unix timestamp to local time components.
-    // We use libc's localtime_r for portability.
+    // localtime_r for portability across unix platforms.
     #[cfg(unix)]
     {
         use std::mem::MaybeUninit;
@@ -106,13 +102,11 @@ static LOGGER: SakuinLogger = SakuinLogger;
 pub fn init(log_path: &str, level: log::LevelFilter) -> Result<(), String> {
     let path = PathBuf::from(log_path);
 
-    // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create log directory {:?}: {}", parent, e))?;
     }
 
-    // Open (or reopen) the log file in append mode.
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -153,10 +147,7 @@ pub fn parse_level(s: &str) -> Option<log::LevelFilter> {
 pub fn clear() {
     let guard = LOG_PATH.lock();
     if let Some(ref path) = *guard {
-        // Truncate the file
-        if let Ok(file) = File::create(path) {
-            drop(file);
-            // Reopen in append mode
+        if File::create(path).is_ok() {
             if let Ok(new_file) = OpenOptions::new().create(true).append(true).open(path) {
                 *LOG_FILE.lock() = Some(new_file);
             }

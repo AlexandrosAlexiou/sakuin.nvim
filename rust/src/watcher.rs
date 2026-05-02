@@ -93,7 +93,6 @@ fn process_events(
             &mut git_sentinel_changed,
         );
 
-        // Use a longer debounce window if a git sentinel was touched.
         let debounce = if git_sentinel_changed {
             DEBOUNCE_GIT
         } else {
@@ -117,16 +116,12 @@ fn process_events(
             }
         }
 
-        // Filter out index directory events.
         paths_to_reindex.retain(|p| !p.starts_with(index_dir));
         paths_to_remove.retain(|p| !p.starts_with(index_dir));
 
         if git_sentinel_changed {
-            // A git operation occurred — use libgit2 for precise change detection
-            // instead of relying on the (possibly incomplete) filesystem events.
             handle_git_operation(project_root, &mut last_head_oid);
         } else {
-            // Normal file edits — use the filesystem events directly.
             handle_file_events(paths_to_reindex, paths_to_remove);
         }
     }
@@ -212,14 +207,14 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
 
 /// Handle normal (non-git) file events.
 fn handle_file_events(
-    paths_to_reindex: std::collections::HashSet<PathBuf>,
+    mut paths_to_reindex: std::collections::HashSet<PathBuf>,
     paths_to_remove: std::collections::HashSet<PathBuf>,
 ) {
+    for p in &paths_to_remove {
+        paths_to_reindex.remove(p);
+    }
     let to_remove: Vec<PathBuf> = paths_to_remove.into_iter().collect();
-    let to_reindex: Vec<PathBuf> = paths_to_reindex
-        .into_iter()
-        .filter(|p| !to_remove.contains(p))
-        .collect();
+    let to_reindex: Vec<PathBuf> = paths_to_reindex.into_iter().collect();
 
     if !to_remove.is_empty() || !to_reindex.is_empty() {
         log::debug!(

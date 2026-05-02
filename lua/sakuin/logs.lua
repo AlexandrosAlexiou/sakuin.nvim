@@ -79,13 +79,11 @@ local function refresh()
 		return
 	end
 
-	-- Check if user is at the bottom BEFORE updating content.
 	local should_scroll = {}
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
 		if vim.api.nvim_win_get_buf(win) == log_bufnr then
 			local old_line_count = vim.api.nvim_buf_line_count(log_bufnr)
 			local cursor = vim.api.nvim_win_get_cursor(win)
-			-- Only auto-scroll if cursor is on the very last line
 			should_scroll[win] = (cursor[1] >= old_line_count)
 		end
 	end
@@ -93,7 +91,6 @@ local function refresh()
 	local lines = read_log_file()
 	render(lines)
 
-	-- Auto-scroll only the windows that were already at the bottom
 	for win, scroll in pairs(should_scroll) do
 		if scroll and vim.api.nvim_win_is_valid(win) then
 			local new_line_count = vim.api.nvim_buf_line_count(log_bufnr)

@@ -28,9 +28,6 @@ function M.sakuin(opts)
 			local my_gen = generation
 			local done = false
 
-			-- ffi dispatcher auto-unregisters this callback on done/error,
-			-- so the coroutine always receives a terminal event and unwinds —
-			-- even when a newer query supersedes us.
 			local pending_items = {} ---@type snacks.picker.finder.Item[]
 			local error_msg = nil ---@type string?
 
@@ -68,11 +65,7 @@ function M.sakuin(opts)
 				return
 			end
 
-			-- Not a busy loop: ctx.async:suspend() yields the coroutine entirely.
-			-- The search callback calls ctx.async:resume() once per batch/done/error,
-			-- so this loop body executes exactly once per rust event, no polling.
-			-- The `if not done` guard prevents a final suspend after the done event,
-			-- which would leave the coroutine suspended and never collected.
+			-- Yield until done; resumed by search callback on each event.
 			while not done do
 				if #pending_items > 0 then
 					local items = pending_items
@@ -91,8 +84,7 @@ function M.sakuin(opts)
 				callback(item)
 			end
 
-			-- Belt-and-braces: dispatcher already removed us on done/error,
-			-- but ensure we're gone if this path was hit via some other exit.
+			-- Defensive cleanup.
 			sakuin_ffi.unregister_search_callback(my_gen)
 
 			if error_msg then

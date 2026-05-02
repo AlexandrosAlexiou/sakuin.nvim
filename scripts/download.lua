@@ -25,7 +25,6 @@ M.local_names = {
 	["Windows-arm64"] = "sakuin.dll",
 }
 
---- Detect the current platform key.
 ---@return string|nil key e.g. "OSX-arm64", or nil if unsupported
 function M.detect_platform()
 	local os_name = jit and jit.os or nil
@@ -44,14 +43,12 @@ function M.detect_platform()
 	return nil
 end
 
---- Get the plugin root directory.
 ---@return string
 function M.plugin_root()
 	local source = debug.getinfo(1, "S").source:sub(2)
 	return vim.fn.fnamemodify(source, ":h:h")
 end
 
---- Download the prebuilt binary for the current platform.
 ---@param version? string Tag name (e.g. "v0.1.0"). nil = latest.
 ---@return boolean success
 ---@return string? error
@@ -76,7 +73,6 @@ function M.download(version)
 		url = string.format("https://github.com/%s/releases/latest/download/%s", M.repo, artifact)
 	end
 
-	-- Download using curl (available on all platforms)
 	print("[sakuin] Downloading " .. artifact .. " ...")
 	local cmd = string.format("curl -fSL --create-dirs -o %s %s", vim.fn.shellescape(dest), vim.fn.shellescape(url))
 
@@ -88,7 +84,6 @@ function M.download(version)
 		return false, "Download failed. URL: " .. url
 	end
 
-	-- Make executable on Unix and strip macOS quarantine attribute
 	if jit.os ~= "Windows" then
 		os.execute("chmod +x " .. vim.fn.shellescape(dest))
 	end
