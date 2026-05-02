@@ -10,18 +10,9 @@ end
 local function lib_path()
 	local root = plugin_root()
 	local os_name = jit.os
-	local prefix, ext
-
-	if os_name == "Windows" then
-		prefix = ""
-		ext = ".dll"
-	elseif os_name == "OSX" then
-		prefix = "lib"
-		ext = ".dylib"
-	else
-		prefix = "lib"
-		ext = ".so"
-	end
+	local exts = { Windows = ".dll", OSX = ".dylib" }
+	local ext = exts[os_name] or ".so"
+	local prefix = os_name == "Windows" and "" or "lib"
 
 	local name = prefix .. "sakuin" .. ext
 	return root .. "/build/" .. name, name

@@ -103,7 +103,6 @@ where
 
     let cancelled = Arc::clone(params.cancelled);
     let needle_clone = needle.clone();
-    let limit_copy = limit;
     let total_clone = Arc::clone(&total_emitted);
     let project_root = params.project_root.to_path_buf();
 
@@ -112,7 +111,7 @@ where
         .spawn(move || {
             top_docs.into_par_iter().for_each(|(_score, doc_address)| {
                 if cancelled.load(Ordering::Relaxed)
-                    || total_clone.load(Ordering::Relaxed) >= limit_copy
+                    || total_clone.load(Ordering::Relaxed) >= limit
                 {
                     return;
                 }

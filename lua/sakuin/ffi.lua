@@ -1,19 +1,11 @@
 --- sakuin.nvim — LuaJIT FFI bindings to the native Rust library.
 ---
---- Architecture for async search (streaming batches):
----   1. We create a `vim.uv.new_async(callback)` handle. Its callback runs on
----      the main Neovim thread — safe for any Lua/API calls.
----   2. We pass the raw `uv_async_t*` handle pointer and the address of
----      `uv_async_send` to Rust via `sakuin_register_async_notifier`.
----   3. The Rust worker thread pushes result batches + a terminal (done/error)
----      message to a VecDeque queue, calling `uv_async_send(handle)` for each.
----   4. Our async callback drains the queue via `sakuin_search_take_result()`,
----      decodes each JSON message, checks generation, and invokes the Lua callback
----      with message type ("batch", "done", or "error").
----
---- This streaming design avoids serializing/transferring all results in a single
---- JSON blob, keeping FFI payloads small and delivering results to the picker
---- incrementally as they are found (like ripgrep + snacks.nvim).
+--- Async search architecture:
+---   1. A `vim.uv.new_async(callback)` handle runs on the main Neovim thread.
+---   2. The raw `uv_async_t*` + `uv_async_send` address are passed to Rust.
+---   3. Rust pushes result batches + terminal messages to a VecDeque, calling
+---      `uv_async_send` for each.
+---   4. The async callback drains the queue, checks generation, and dispatches.
 
 local ffi = require("ffi")
 
@@ -83,21 +75,13 @@ local function resolve_lib_path()
 	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h")
 
 	local os_name = jit.os -- "Windows", "Linux", "OSX"
-	local ext
-	if os_name == "Windows" then
-		ext = ".dll"
-	elseif os_name == "OSX" then
-		ext = ".dylib"
-	else
-		ext = ".so"
-	end
+	local exts = { Windows = ".dll", OSX = ".dylib" }
+	local ext = exts[os_name] or ".so"
 
 	local prefix = os_name == "Windows" and "" or "lib"
 	return plugin_root .. "/build/" .. prefix .. "sakuin" .. ext
 end
 
--- Called on the main Neovim thread via uv_async_send. Drains both the indexing
--- event slot and the search result queue on every wake-up.
 local function on_async_notification()
 	if not lib then
 		return
@@ -156,20 +140,13 @@ function M.load()
 	lib = ffi.load(lib_path)
 
 	async_handle = vim.uv.new_async(function()
-		-- vim.schedule to ensure we're fully in the Neovim event loop context
 		vim.schedule(on_async_notification)
 	end)
 
-	-- Get the raw uv_async_t* pointer from the luv userdata.
-	--
-	-- luv (vim.uv) allocates libuv handles on the heap via malloc() and stores
-	-- a pointer to them in the Lua userdata payload. The userdata is effectively
-	-- a void** where [0] is the raw uv_async_t*. We cast to void** and
-	-- dereference once to get the actual handle pointer.
+	-- luv userdata is a void** to the raw uv_async_t*; dereference once.
 	local handle_ptr = ffi.cast("void**", async_handle)[0]
 
-	-- Neovim exports libuv symbols into the process global symbol table;
-	-- ffi.C accesses them on all platforms. Docs: https://docs.libuv.org/en/v1.x/async.html
+	-- Resolve uv_async_send from Neovim's exported libuv symbols.
 	local ok_send, send_fn_ptr = pcall(function()
 		return ffi.C.uv_async_send
 	end)

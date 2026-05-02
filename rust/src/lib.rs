@@ -11,11 +11,7 @@ mod watcher;
 
 use std::os::raw::{c_char, c_void};
 
-// FFI functions receive raw pointers from the caller (LuaJIT FFI). The
-// `not_unsafe_ptr_arg_deref` lint fires because these `extern "C"` functions
-// dereference raw pointers without being marked `unsafe`. Marking them
-// `unsafe` is incorrect — they ARE the safe boundary that validates pointers
-// before use. The actual dereferences are wrapped in `unsafe {}` blocks inside.
+// These extern "C" fns validate raw ptrs internally; `unsafe` on the fn itself is incorrect.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 mod ffi_exports {
     use super::*;
@@ -278,7 +274,6 @@ mod ffi_exports {
 pub use ffi_exports::*;
 
 /// Internal API for the debug CLI binary and integration tests.
-/// Not part of the C FFI surface exposed to Neovim.
 #[doc(hidden)]
 pub mod internal {
     pub use crate::state::{

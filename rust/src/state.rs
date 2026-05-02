@@ -16,7 +16,6 @@ use crate::types::{IndexStats, SakuinConfig, SearchResult};
 use crate::walker;
 use crate::watcher;
 
-/// The global singleton holding all engine state.
 pub struct SakuinState {
     pub project_root: PathBuf,
     pub index_dir: PathBuf,
@@ -58,7 +57,7 @@ fn global_state() -> &'static Mutex<Option<SakuinState>> {
     STATE.get_or_init(|| Mutex::new(None))
 }
 
-/// Initialize the engine. Must be called before any other operation.
+/// Must be called before any other operation.
 pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> Result<(), String> {
     let project_root = PathBuf::from(project_root);
     let index_dir = PathBuf::from(index_dir);
@@ -99,7 +98,7 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
     Ok(())
 }
 
-/// Shut down the engine: stop watcher, stop worker, commit pending writes, drop state.
+/// Stop watcher, stop worker, commit pending writes, drop state.
 pub fn shutdown() {
     // Tell any in-flight indexing to exit its loop and commit whatever it has
     // done so far. Without this, shutdown() would block on global_state().lock()
@@ -124,15 +123,9 @@ pub fn shutdown() {
     }
 }
 
-/// Build the entire index from scratch.
-///
-/// Walks the project directory, clears the existing index, and re-indexes
-/// all matching files.
-///
 /// Rayon tasks read files AND call add_document directly with a brief
 /// per-call lock on the IndexWriter. add_document is just a crossbeam
-/// channel send (~100ns) so contention is negligible. Tantivy's internal
-/// worker threads handle tokenization and segment writing in parallel.
+/// channel send (~100ns) so contention is negligible.
 pub fn build_index() -> Result<u64, String> {
     CANCEL_INDEXING.store(false, Ordering::SeqCst);
 
@@ -141,8 +134,6 @@ pub fn build_index() -> Result<u64, String> {
     prog.done.store(0, Ordering::SeqCst);
     prog.total.store(0, Ordering::SeqCst);
 
-    // Briefly hold the global lock to clone what we need, then release it so
-    // shutdown() is never blocked for the entire duration of indexing.
     let (project_root, schema, writer, config, reader) = {
         let guard = global_state().lock();
         let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -174,9 +165,6 @@ pub fn build_index() -> Result<u64, String> {
             .map_err(|e| format!("Failed to clear index: {}", e))?;
     }
 
-    // Rayon tasks read files AND call add_document directly. add_document is
-    // just a crossbeam channel send (~100ns), so per-call locking on the
-    // Arc<Mutex<IndexWriter>> has negligible contention.
     let indexed_count = Arc::new(AtomicU64::new(0));
     let error_count = Arc::new(AtomicU64::new(0));
     let done_counter = Arc::new(AtomicU64::new(0));
@@ -221,14 +209,12 @@ pub fn build_index() -> Result<u64, String> {
     let indexed_count = indexed_count.load(Ordering::Relaxed);
     let error_count = error_count.load(Ordering::Relaxed);
 
-    // Commit even on cancellation so partial progress is not lost.
     {
         let mut writer_guard = writer.lock();
         writer_guard
             .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
     }
-    // Reload so the partial or complete results are visible in this session.
     let _ = reader.reload();
 
     prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
@@ -259,8 +245,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     });
     notify_main_thread();
 
-    // Briefly hold the global lock to clone what we need, then release it so
-    // shutdown() is never blocked for the entire duration of indexing.
     let (project_root, schema, writer, config, reader) = {
         let guard = global_state().lock();
         let state = guard.as_ref().ok_or("sakuin not initialized")?;
@@ -331,7 +315,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 
     let total_to_index = files_to_index.len() as u64;
     prog.total.store(total_to_index, Ordering::SeqCst);
-    // Push immediately so the UI appears as soon as the work list is known.
     *indexing_event_slot().lock() = Some(IndexingEvent {
         total: total_to_index,
         done: 0,
@@ -355,7 +338,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         }
     }
 
-    // Rayon tasks read files AND call add_document directly with per-call locking.
     let added = Arc::new(AtomicU64::new(0));
     let updated = Arc::new(AtomicU64::new(0));
     let done_counter = Arc::new(AtomicU64::new(0));
@@ -400,14 +382,12 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let added = added.load(Ordering::Relaxed);
     let updated = updated.load(Ordering::Relaxed);
 
-    // Commit even on cancellation so partial progress is not lost.
     {
         let mut writer_guard = writer.lock();
         writer_guard
             .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
     }
-    // Reload so the partial or complete results are visible in this session.
     let _ = reader.reload();
 
     prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
@@ -493,10 +473,7 @@ pub fn indexing_take_event() -> Option<IndexingEvent> {
 }
 
 pub fn push_indexing_event(event: IndexingEvent) {
-    {
-        let mut slot = indexing_event_slot().lock();
-        *slot = Some(event);
-    }
+    *indexing_event_slot().lock() = Some(event);
     notify_main_thread();
 }
 
@@ -518,19 +495,14 @@ pub enum SearchResultMessage {
     },
 }
 
-/// The shared result queue. The worker pushes here, Lua drains via `search_take_result`.
 static SEARCH_RESULT_QUEUE: OnceLock<Mutex<VecDeque<SearchResultMessage>>> = OnceLock::new();
 
 fn search_result_queue() -> &'static Mutex<VecDeque<SearchResultMessage>> {
     SEARCH_RESULT_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
-/// Holds the raw libuv async handle pointer and the `uv_async_send` function pointer.
-/// These are provided by the Lua side at startup.
 struct AsyncNotifier {
-    /// Raw `uv_async_t*` pointer from `vim.uv.new_async()`.
     handle: *mut c_void,
-    /// Function pointer: `int uv_async_send(uv_async_t* handle)`.
     send_fn: unsafe extern "C" fn(*mut c_void) -> i32,
 }
 
@@ -592,7 +564,7 @@ fn search_worker_state() -> &'static Mutex<Option<SearchWorker>> {
     SEARCH_WORKER.get_or_init(|| Mutex::new(None))
 }
 
-/// Ensure the persistent worker thread is running. Idempotent.
+/// Idempotent.
 fn ensure_worker() {
     let mut guard = search_worker_state().lock();
     if guard.is_some() {

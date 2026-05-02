@@ -8,8 +8,6 @@ local function start_watcher_if_enabled(ffi_mod, config)
 	end
 end
 
--- Drives one indexing run: notifies start, ignores intermediate progress events,
--- and routes the terminal event to progress.done / progress.fail.
 ---@param ffi_mod table
 ---@param label string
 ---@param on_done? fun()
@@ -78,9 +76,7 @@ local function init_engine(config)
 	return ffi_mod
 end
 
--- Runs off the main loop so setup() returns immediately. Skips entirely when
--- there's no .sakuin/ yet — the user must run :SakuinBuild first, otherwise
--- we'd build an index unprompted on every cwd that has the plugin loaded.
+-- Skips if no .sakuin/ exists (user must :SakuinBuild first).
 ---@param config table
 local function deferred_startup(config)
 	local index_dir = vim.fn.getcwd() .. "/.sakuin"
@@ -153,8 +149,7 @@ function M.setup(opts)
 	end)
 end
 
--- Lazy-inits the engine on first :SakuinBuild — startup skips init when there's
--- no .sakuin/ yet, so the first build has to bring the engine up itself.
+-- Lazy-inits engine if not already loaded.
 ---@param mode "build"|"update"
 function M.async_index(mode)
 	local ffi_mod = require("sakuin.ffi")

@@ -32,7 +32,7 @@ vim.api.nvim_create_user_command("Sakuin", function(opts)
   if not search_preflight() then
     return
   end
-  local search = (opts.args and opts.args ~= "") and opts.args or nil
+  local search = opts.args ~= "" and opts.args or nil
   require("sakuin.picker").sakuin({ search = search })
 end, {
   nargs = "?",

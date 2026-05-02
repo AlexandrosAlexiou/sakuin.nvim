@@ -47,7 +47,6 @@ pub fn detect_changes(project_root: &Path) -> Result<GitChanges, String> {
     let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
 
     // Diff HEAD tree against the working directory.
-    // This shows us everything that changed relative to the last commit.
     let mut diff_opts = git2::DiffOptions::new();
     diff_opts
         .include_untracked(true)
@@ -124,7 +123,6 @@ fn categorize_delta(delta: &git2::DiffDelta<'_>, project_root: &Path, changes: &
             }
         }
         Delta::Renamed => {
-            // Old path is deleted, new path is added
             if let Some(path) = delta.old_file().path() {
                 changes.deleted.push(project_root.join(path));
             }
@@ -133,8 +131,6 @@ fn categorize_delta(delta: &git2::DiffDelta<'_>, project_root: &Path, changes: &
             }
         }
         Delta::Untracked => {
-            // New untracked files — they exist on disk but aren't in the index.
-            // We still want to index them for search.
             if let Some(path) = delta.new_file().path() {
                 changes.modified.push(project_root.join(path));
             }
