@@ -1,5 +1,3 @@
---- sakuin.nvim — Configuration management.
-
 local M = {}
 
 M.defaults = {
@@ -55,15 +53,13 @@ M.defaults = {
 
 M.current = vim.deepcopy(M.defaults)
 
---- Apply user configuration on top of defaults.
----@param opts table User overrides
----@return table config The merged configuration
+---@param opts table
+---@return table
 function M.apply(opts)
   M.current = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
   return M.current
 end
 
---- Get the current configuration.
 ---@return table
 function M.get()
   return M.current

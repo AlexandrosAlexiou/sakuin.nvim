@@ -1,26 +1,8 @@
---- sakuin.nvim — User commands and autocommands.
---- Auto-loaded by Neovim from plugin/ directory.
-
 if vim.g.loaded_sakuin then
   return
 end
 vim.g.loaded_sakuin = true
 
----@param bytes number
----@return string
-local function format_bytes(bytes)
-  if bytes < 1024 then
-    return bytes .. " B"
-  elseif bytes < 1024 * 1024 then
-    return string.format("%.1f KB", bytes / 1024)
-  elseif bytes < 1024 * 1024 * 1024 then
-    return string.format("%.1f MB", bytes / (1024 * 1024))
-  else
-    return string.format("%.1f GB", bytes / (1024 * 1024 * 1024))
-  end
-end
-
----@return string
 local function get_visual_selection()
   -- Exit visual mode to update '< and '> marks
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
@@ -30,20 +12,24 @@ local function get_visual_selection()
   return table.concat(lines, " ")
 end
 
-vim.api.nvim_create_user_command("Sakuin", function(opts)
-  local has_snacks, _ = pcall(require, "snacks")
-  if not has_snacks then
+local function search_preflight()
+  if not pcall(require, "snacks") then
     vim.notify("[sakuin] snacks.nvim is required for the search UI", vim.log.levels.ERROR)
-    return
+    return false
   end
-  local progress = require("sakuin.progress")
-  if progress.is_indexing then
+  if require("sakuin.progress").is_indexing then
     vim.notify("[sakuin] Indexing is in progress, please wait…", vim.log.levels.WARN)
-    return
+    return false
   end
-  local ffi_mod = require("sakuin.ffi")
-  if not ffi_mod.is_loaded() then
+  if not require("sakuin.ffi").is_loaded() then
     vim.notify("[sakuin] No index found. Run :SakuinBuild first.", vim.log.levels.WARN)
+    return false
+  end
+  return true
+end
+
+vim.api.nvim_create_user_command("Sakuin", function(opts)
+  if not search_preflight() then
     return
   end
   local search = (opts.args and opts.args ~= "") and opts.args or nil
@@ -54,30 +40,10 @@ end, {
 })
 
 vim.api.nvim_create_user_command("SakuinCword", function(opts)
-  local has_snacks, _ = pcall(require, "snacks")
-  if not has_snacks then
-    vim.notify("[sakuin] snacks.nvim is required for the search UI", vim.log.levels.ERROR)
+  if not search_preflight() then
     return
   end
-  local progress = require("sakuin.progress")
-  if progress.is_indexing then
-    vim.notify("[sakuin] Indexing is in progress, please wait…", vim.log.levels.WARN)
-    return
-  end
-  local ffi_mod = require("sakuin.ffi")
-  if not ffi_mod.is_loaded() then
-    vim.notify("[sakuin] No index found. Run :SakuinBuild first.", vim.log.levels.WARN)
-    return
-  end
-
-  local text
-  if opts.range > 0 then
-    -- Called from visual mode (via :'<,'>SakuinCword)
-    text = get_visual_selection()
-  else
-    text = vim.fn.expand("<cword>")
-  end
-
+  local text = opts.range > 0 and get_visual_selection() or vim.fn.expand("<cword>")
   if text and text ~= "" then
     require("sakuin.picker").sakuin({ search = text })
   end
@@ -116,6 +82,7 @@ vim.api.nvim_create_user_command("SakuinStats", function()
   end
   local stats, err = ffi_mod.stats()
   if stats then
+    local format_bytes = require("sakuin.util").format_bytes
     local msg = string.format(
       "[sakuin] %d files indexed | %d segments | %s on disk\n  root: %s",
       stats.num_docs,

@@ -1,22 +1,13 @@
---- sakuin.nvim — Log viewer.
----
---- Opens a scratch buffer showing sakuin's log file.
---- The buffer auto-refreshes while open so you can watch git change
---- detection, watcher events, and indexing in real time.
---- Logs are stored at `vim.fn.stdpath("state") .. "/sakuin.log"`.
+-- Auto-refreshing scratch buffer over sakuin's log file. Lets you watch git
+-- change detection, watcher events, and indexing in real time.
 
 local M = {}
 
----@type number|nil Buffer number for the log viewer
-local log_bufnr = nil
+local log_bufnr = nil ---@type number|nil
+local refresh_timer = nil ---@type userdata|nil
 
----@type userdata|nil Timer handle for auto-refresh
-local refresh_timer = nil
-
---- Refresh interval in milliseconds.
 local REFRESH_MS = 1000
 
---- Level highlight groups.
 local level_hl = {
 	ERROR = "DiagnosticError",
 	["WARN "] = "DiagnosticWarn",
@@ -25,14 +16,12 @@ local level_hl = {
 	TRACE = "Comment",
 }
 
---- Get the log file path from config.
 ---@return string
 local function log_file_path()
 	local config = require("sakuin.config").get()
 	return config.log_file or (vim.fn.stdpath("state") .. "/sakuin.log")
 end
 
---- Read all lines from the log file.
 ---@return string[]
 local function read_log_file()
 	local path = log_file_path()
@@ -54,7 +43,6 @@ local function read_log_file()
 	return lines
 end
 
---- Render log lines into the buffer with highlights.
 ---@param lines string[]
 local function render(lines)
 	if not log_bufnr or not vim.api.nvim_buf_is_valid(log_bufnr) then
@@ -65,7 +53,6 @@ local function render(lines)
 	vim.api.nvim_buf_set_lines(log_bufnr, 0, -1, false, lines)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = log_bufnr })
 
-	-- Apply highlights for log levels
 	vim.api.nvim_buf_clear_namespace(log_bufnr, -1, 0, -1)
 	for i, line in ipairs(lines) do
 		for level_str, hl_group in pairs(level_hl) do
@@ -86,7 +73,6 @@ local function render(lines)
 	end
 end
 
---- Refresh the log buffer from the file.
 local function refresh()
 	if not log_bufnr or not vim.api.nvim_buf_is_valid(log_bufnr) then
 		M.close()
@@ -116,7 +102,6 @@ local function refresh()
 	end
 end
 
---- Start the auto-refresh timer.
 local function start_timer()
 	if refresh_timer then
 		return
@@ -125,7 +110,6 @@ local function start_timer()
 	refresh_timer:start(0, REFRESH_MS, vim.schedule_wrap(refresh))
 end
 
---- Stop the auto-refresh timer.
 local function stop_timer()
 	if refresh_timer then
 		refresh_timer:stop()
@@ -134,12 +118,10 @@ local function stop_timer()
 	end
 end
 
---- Open the log viewer in a new split.
 ---@param opts? { level?: string }
 function M.open(opts)
 	opts = opts or {}
 
-	-- Set log level if requested
 	if opts.level then
 		local ok, ffi_mod = pcall(require, "sakuin.ffi")
 		if ok and ffi_mod.is_loaded() then
@@ -153,7 +135,6 @@ function M.open(opts)
 		end
 	end
 
-	-- Reuse existing buffer if it's still valid
 	if log_bufnr and vim.api.nvim_buf_is_valid(log_bufnr) then
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
 			if vim.api.nvim_win_get_buf(win) == log_bufnr then
@@ -169,7 +150,6 @@ function M.open(opts)
 		return
 	end
 
-	-- Create a new scratch buffer
 	log_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_set_option_value("buftype", "nofile", { buf = log_bufnr })
 	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = log_bufnr })
@@ -181,7 +161,6 @@ function M.open(opts)
 	vim.api.nvim_win_set_buf(0, log_bufnr)
 	vim.api.nvim_win_set_height(0, 15)
 
-	-- Buffer-local keymaps
 	local buf_opts = { buffer = log_bufnr, silent = true }
 	vim.keymap.set("n", "q", function()
 		M.close()
@@ -197,7 +176,6 @@ function M.open(opts)
 		end
 	end, buf_opts)
 
-	-- Clean up when buffer is wiped
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		buffer = log_bufnr,
 		callback = function()
@@ -210,7 +188,6 @@ function M.open(opts)
 	refresh()
 end
 
---- Close the log viewer.
 function M.close()
 	stop_timer()
 	if log_bufnr and vim.api.nvim_buf_is_valid(log_bufnr) then

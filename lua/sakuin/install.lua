@@ -1,6 +1,3 @@
---- sakuin.nvim — Binary installation and management.
---- Used by lazy.nvim build hook and manual installation.
-
 local M = {}
 
 ---@return string
@@ -36,7 +33,6 @@ function M.has_binary()
 	return vim.fn.filereadable(path) == 1
 end
 
---- Try to download a prebuilt binary from GitHub Releases.
 ---@param version? string Tag name (e.g. "v0.1.0"), nil for latest
 ---@return boolean success
 ---@return string? error
@@ -52,7 +48,6 @@ local function try_download(version)
 	return download.download(version)
 end
 
---- Try to build from source using cargo.
 ---@return boolean success
 ---@return string? error
 local function try_cargo_build()
@@ -99,9 +94,8 @@ local function try_cargo_build()
 	return true, nil
 end
 
---- Ensure the native binary is available.
---- Tries: 1) check if it exists, 2) download prebuilt, 3) build from source.
---- This is the function to use as a lazy.nvim build hook.
+-- Tries: 1) check if it exists, 2) download prebuilt, 3) build from source.
+-- Used as the lazy.nvim build hook.
 ---@param opts? { version?: string }
 function M.ensure_binary(opts)
 	opts = opts or {}

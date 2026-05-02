@@ -1,16 +1,20 @@
---- sakuin.nvim — Indexed full-text search for Neovim
---- Main entry point and public API.
-
 local M = {}
 
----@type boolean
 local initialized = false
 
---- Register an indexing callback that only cares about done/error.
---- Notifies start via vim.notify, and finish/fail when the event arrives.
----@param ffi_mod table The FFI module
----@param label string Label for notifications (e.g. "Syncing")
----@param on_done? fun() Optional callback when indexing finishes successfully
+local function start_watcher_if_enabled(ffi_mod, config)
+	if config.watch then
+		vim.schedule(function()
+			ffi_mod.start_watcher()
+		end)
+	end
+end
+
+-- Drives one indexing run: notifies start, ignores intermediate progress events,
+-- and routes the terminal event to progress.done / progress.fail.
+---@param ffi_mod table
+---@param label string
+---@param on_done? fun()
 local function watch_indexing(ffi_mod, label, on_done)
 	local progress = require("sakuin.progress")
 	local finished = false
@@ -22,7 +26,7 @@ local function watch_indexing(ffi_mod, label, on_done)
 			return
 		end
 		if event.status == "progress" then
-			return -- ignore intermediate progress
+			return
 		end
 
 		finished = true
@@ -42,10 +46,8 @@ local function watch_indexing(ffi_mod, label, on_done)
 	end)
 end
 
---- Initialize the engine: load library, open index, mark as initialized.
---- Reused by both deferred_startup and async_index (first build).
----@param config table The merged configuration
----@return table|nil ffi_mod The FFI module on success, nil on failure
+---@param config table
+---@return table|nil ffi_mod
 local function init_engine(config)
 	local ffi_mod = require("sakuin.ffi")
 
@@ -79,17 +81,12 @@ local function init_engine(config)
 	return ffi_mod
 end
 
---- Deferred startup sequence. Runs entirely off the main loop so setup()
---- returns immediately and Neovim is never blocked.
----
---- Only auto-syncs if the .sakuin/ index directory already exists.
---- If it doesn't, the user must run :SakuinBuild first.
----@param config table The merged configuration
+-- Runs off the main loop so setup() returns immediately. Skips entirely when
+-- there's no .sakuin/ yet — the user must run :SakuinBuild first, otherwise
+-- we'd build an index unprompted on every cwd that has the plugin loaded.
+---@param config table
 local function deferred_startup(config)
-	local root = vim.fn.getcwd()
-	local index_dir = root .. "/.sakuin"
-
-	-- No existing index — wait for the user to run :SakuinBuild
+	local index_dir = vim.fn.getcwd() .. "/.sakuin"
 	if vim.fn.isdirectory(index_dir) == 0 then
 		return
 	end
@@ -99,35 +96,25 @@ local function deferred_startup(config)
 		return
 	end
 
-	-- Start watcher after sync completes (or immediately if no update)
-	local function start_watcher_if_enabled()
-		if config.watch then
-			vim.schedule(function()
-				ffi_mod.start_watcher()
-			end)
-		end
-	end
-
 	if config.update_on_start then
 		local update_rc = ffi_mod.update_index_async()
 		if update_rc == 0 then
-			watch_indexing(ffi_mod, "Syncing", start_watcher_if_enabled)
+			watch_indexing(ffi_mod, "Syncing", function()
+				start_watcher_if_enabled(ffi_mod, config)
+			end)
 		else
 			vim.notify(
 				"[sakuin] Failed to start async update: " .. (ffi_mod.last_error() or "unknown"),
 				vim.log.levels.ERROR
 			)
-			start_watcher_if_enabled()
+			start_watcher_if_enabled(ffi_mod, config)
 		end
 	else
-		start_watcher_if_enabled()
+		start_watcher_if_enabled(ffi_mod, config)
 	end
 end
 
---- Setup the plugin with user configuration.
---- Returns immediately — all heavy work (library loading, index opening,
---- incremental update) runs asynchronously via vim.schedule.
----@param opts? table User configuration (see sakuin.config for defaults)
+---@param opts? table
 function M.setup(opts)
 	local config = require("sakuin.config").apply(opts or {})
 
@@ -179,13 +166,12 @@ function M.search(query)
 	return require("sakuin.ffi").search(query)
 end
 
---- On the first :SakuinBuild, lazy-initializes the engine if needed.
----@param mode string "build" or "update"
+-- Lazy-inits the engine on first :SakuinBuild — startup skips init when there's
+-- no .sakuin/ yet, so the first build has to bring the engine up itself.
+---@param mode "build"|"update"
 function M.async_index(mode)
 	local ffi_mod = require("sakuin.ffi")
 
-	-- Lazy-init: if the engine isn't loaded yet (no .sakuin/ existed at startup),
-	-- initialize it now so :SakuinBuild works.
 	if not ffi_mod.is_loaded() then
 		local config = require("sakuin.config").get()
 		ffi_mod = init_engine(config) --[[@as table]]
@@ -202,19 +188,13 @@ function M.async_index(mode)
 
 	local label = mode == "build" and "Building" or "Updating"
 	local fn_async = mode == "build" and ffi_mod.build_index_async or ffi_mod.update_index_async
-
 	local config = require("sakuin.config").get()
-	local function start_watcher_if_enabled()
-		if config.watch then
-			vim.schedule(function()
-				ffi_mod.start_watcher()
-			end)
-		end
-	end
 
 	local rc = fn_async()
 	if rc == 0 then
-		watch_indexing(ffi_mod, label, start_watcher_if_enabled)
+		watch_indexing(ffi_mod, label, function()
+			start_watcher_if_enabled(ffi_mod, config)
+		end)
 	else
 		vim.notify("[sakuin] Failed to start: " .. (ffi_mod.last_error() or "unknown"), vim.log.levels.ERROR)
 	end
