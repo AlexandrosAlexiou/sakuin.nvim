@@ -1,7 +1,3 @@
-//! FFI helper utilities for the sakuin Neovim plugin.
-//!
-//! Handles conversion between Rust and C types at the FFI boundary.
-
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::OnceLock;

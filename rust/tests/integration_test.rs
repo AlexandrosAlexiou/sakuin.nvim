@@ -104,23 +104,16 @@ fn init_and_build(project: &TempDir) {
     let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
     assert_eq!(rc, 0, "sakuin_init should succeed");
 
-    let rc = sakuin::sakuin_build_index();
-    assert_eq!(rc, 0, "sakuin_build_index should succeed");
+    sakuin::internal::build_index().expect("build_index should succeed");
 }
 
 /// Test helper: synchronous search, returns parsed JSON results.
 fn sync_search(query: &str) -> Vec<serde_json::Value> {
-    let c_query = CString::new(query).unwrap();
-    let results_ptr = sakuin::sakuin_search(c_query.as_ptr());
-    assert!(
-        !results_ptr.is_null(),
-        "sakuin_search should return non-null for query '{}'",
-        query
-    );
-    let results_json = unsafe { CStr::from_ptr(results_ptr) }.to_str().unwrap();
-    let results: Vec<serde_json::Value> = serde_json::from_str(results_json).unwrap();
-    sakuin::sakuin_free_string(results_ptr);
-    results
+    let mut results = Vec::new();
+    sakuin::internal::do_search_streaming(query, |batch| results.extend(batch))
+        .unwrap_or_else(|e| panic!("search for {:?} failed: {}", query, e));
+    let json = serde_json::to_string(&results).unwrap();
+    serde_json::from_str(&json).unwrap()
 }
 
 /// Test helper: collect all file paths from search results.
@@ -193,8 +186,7 @@ fn test_incremental_update() {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Update index
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     // Search for the new content
     let results = sync_search("bananaphone");
@@ -725,8 +717,7 @@ fn test_incremental_file_deletion() {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Incremental update
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0, "sakuin_update_index should succeed");
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     // Vec3 should now only appear in results if another file references it
     // (it shouldn't, since we only defined it in math.rs)
@@ -755,8 +746,7 @@ fn test_incremental_file_addition() {
     .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     let results = sync_search("connect_to_remote_server");
     assert!(
@@ -787,8 +777,7 @@ fn test_init_with_config_json() {
     let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr());
     assert_eq!(rc, 0, "sakuin_init with valid config JSON should succeed");
 
-    let rc = sakuin::sakuin_build_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::build_index().expect("build_index should succeed");
 
     let results = sync_search("hello");
     assert!(
@@ -825,83 +814,6 @@ fn test_init_with_invalid_config_json() {
         err
     );
     sakuin::sakuin_free_string(err_ptr);
-}
-
-// ============================================================================
-// sakuin_last_error
-// ============================================================================
-
-#[test]
-#[serial]
-fn test_last_error_after_failed_search() {
-    // Ensure state is None going in (all prior tests call sakuin_shutdown,
-    // but call it here defensively in case a previous test panicked).
-    sakuin::sakuin_shutdown();
-
-    // Clear any leftover error from a previous test run.
-    let stale = sakuin::sakuin_last_error();
-    if !stale.is_null() {
-        sakuin::sakuin_free_string(stale);
-    }
-
-    // Searching without init must return null and record the error.
-    let c_query = CString::new("hello").unwrap();
-    let result_ptr = sakuin::sakuin_search(c_query.as_ptr());
-    assert!(
-        result_ptr.is_null(),
-        "sakuin_search without init should return null"
-    );
-
-    let err_ptr = sakuin::sakuin_last_error();
-    assert!(
-        !err_ptr.is_null(),
-        "sakuin_last_error should be non-null after failed search"
-    );
-    let err = unsafe { CStr::from_ptr(err_ptr) }.to_str().unwrap();
-    assert!(
-        err.contains("not initialized"),
-        "Unexpected error message: {}",
-        err
-    );
-    sakuin::sakuin_free_string(err_ptr);
-
-    // Reading clears the slot — second call should return null.
-    let err_ptr2 = sakuin::sakuin_last_error();
-    assert!(
-        err_ptr2.is_null(),
-        "sakuin_last_error should be null after it has been read once"
-    );
-}
-
-// ============================================================================
-// sakuin_get_progress
-// ============================================================================
-
-#[test]
-#[serial]
-fn test_get_progress_after_build() {
-    let project = create_test_project();
-    init_and_build(&project);
-
-    let prog_ptr = sakuin::sakuin_get_progress();
-    assert!(
-        !prog_ptr.is_null(),
-        "sakuin_get_progress should return non-null"
-    );
-
-    let prog_json = unsafe { CStr::from_ptr(prog_ptr) }.to_str().unwrap();
-    let prog: serde_json::Value = serde_json::from_str(prog_json).unwrap();
-    sakuin::sakuin_free_string(prog_ptr);
-
-    assert!(prog.get("total").is_some(), "Progress should have 'total'");
-    assert!(prog.get("done").is_some(), "Progress should have 'done'");
-    assert_eq!(
-        prog["status"].as_str().unwrap(),
-        "done",
-        "Status should be 'done' after synchronous build"
-    );
-
-    sakuin::sakuin_shutdown();
 }
 
 // ============================================================================
@@ -1153,8 +1065,7 @@ fn init_and_build_git(project: &TempDir) {
     let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
     assert_eq!(rc, 0, "sakuin_init should succeed");
 
-    let rc = sakuin::sakuin_build_index();
-    assert_eq!(rc, 0, "sakuin_build_index should succeed");
+    sakuin::internal::build_index().expect("build_index should succeed");
 }
 
 #[test]
@@ -1187,8 +1098,7 @@ fn test_e2e_git_new_file_then_update() {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Incremental update picks up the new file
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     let results = sync_search("brand_new_e2e_feature");
     assert!(
@@ -1294,8 +1204,7 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
     fs::write(root.join("src/extra.rs"), &extra_content).unwrap();
 
     // Incremental update should pick up changes from the branch switch
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     // original_function was replaced — should no longer appear
     let results = sync_search("original_function");
@@ -1339,8 +1248,7 @@ fn test_e2e_git_file_deleted_then_update() {
     fs::remove_file(root.join("src/lib.rs")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let rc = sakuin::sakuin_update_index();
-    assert_eq!(rc, 0);
+    sakuin::internal::update_index().expect("update_index should succeed");
 
     let results = sync_search("original_function");
     let paths = result_paths(&results);

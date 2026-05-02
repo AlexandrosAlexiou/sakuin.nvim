@@ -33,12 +33,6 @@ M.defaults = {
     limit = 10000,
   },
 
-  display = {
-    icons = true,
-    treesitter = true,
-    show_col = true,
-  },
-
   progress = {
     enabled = true,
   },

@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::os::raw::c_void;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -124,87 +124,6 @@ pub fn shutdown() {
     }
 }
 
-/// A pre-read document ready to be added to the index.
-struct PreparedDoc {
-    relative: String,
-    filename: String,
-    extension: String,
-    body: String,
-    modified: u64,
-    size: u64,
-}
-
-/// Read a file and prepare its document fields. This is the CPU/IO-heavy part
-/// that benefits from parallelism.
-fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
-    let relative = file_path
-        .strip_prefix(project_root)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .to_string();
-
-    let filename = file_path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let extension = file_path
-        .extension()
-        .map(|e| e.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let metadata = std::fs::metadata(file_path)
-        .map_err(|e| format!("Failed to read metadata for {:?}: {}", file_path, e))?;
-
-    let modified = metadata
-        .modified()
-        .map_err(|e| format!("Failed to get mtime for {:?}: {}", file_path, e))?
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let size = metadata.len();
-
-    let body = std::fs::read_to_string(file_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
-
-    Ok(PreparedDoc {
-        relative,
-        filename,
-        extension,
-        body,
-        modified,
-        size,
-    })
-}
-
-/// Add a prepared document to the index writer.
-fn add_prepared_doc(writer: &IndexWriter, schema: &Schema, doc: PreparedDoc) -> Result<(), String> {
-    use tantivy::doc;
-
-    let path_field = schema.get_field(index::FIELD_PATH).unwrap();
-    let path_exact_field = schema.get_field(index::FIELD_PATH_EXACT).unwrap();
-    let filename_field = schema.get_field(index::FIELD_FILENAME).unwrap();
-    let extension_field = schema.get_field(index::FIELD_EXTENSION).unwrap();
-    let body_field = schema.get_field(index::FIELD_BODY).unwrap();
-    let modified_field = schema.get_field(index::FIELD_MODIFIED).unwrap();
-    let size_field = schema.get_field(index::FIELD_SIZE).unwrap();
-
-    writer
-        .add_document(doc!(
-            path_field => doc.relative.clone(),
-            path_exact_field => doc.relative,
-            filename_field => doc.filename,
-            extension_field => doc.extension,
-            body_field => doc.body,
-            modified_field => doc.modified,
-            size_field => doc.size,
-        ))
-        .map_err(|e| format!("Failed to add document: {}", e))?;
-
-    Ok(())
-}
-
 /// Build the entire index from scratch.
 ///
 /// Walks the project directory, clears the existing index, and re-indexes
@@ -279,10 +198,10 @@ pub fn build_index() -> Result<u64, String> {
             });
             notify_main_thread();
         }
-        match prepare_doc(&project_root, file_path) {
+        match index::prepare_doc(&project_root, file_path) {
             Ok(doc) => {
                 let writer_guard = writer.lock();
-                match add_prepared_doc(&writer_guard, &schema, doc) {
+                match index::add_prepared_doc(&writer_guard, &schema, doc) {
                     Ok(()) => {
                         indexed_count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -460,10 +379,10 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
                 });
                 notify_main_thread();
             }
-            match prepare_doc(&project_root, file_path) {
+            match index::prepare_doc(&project_root, file_path) {
                 Ok(doc) => {
                     let writer_guard = writer.lock();
-                    match add_prepared_doc(&writer_guard, &schema, doc) {
+                    match index::add_prepared_doc(&writer_guard, &schema, doc) {
                         Ok(()) => {
                             if *is_update {
                                 updated.fetch_add(1, Ordering::Relaxed);

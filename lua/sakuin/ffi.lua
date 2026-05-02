@@ -23,11 +23,8 @@ ffi.cdef([[
   void        sakuin_shutdown(void);
 
   /* Indexing */
-  int         sakuin_build_index(void);
-  int         sakuin_update_index(void);
   int         sakuin_build_index_async(void);
   int         sakuin_update_index_async(void);
-  const char* sakuin_get_progress(void);
 
   /* Watcher */
   int         sakuin_start_watcher(void);
@@ -41,9 +38,6 @@ ffi.cdef([[
 
   /* Indexing completion event (pushed via uv_async_send, same channel as search) */
   const char* sakuin_indexing_take_event(void);
-
-  /* Search — synchronous (blocks caller) */
-  const char* sakuin_search(const char* query);
 
   /* Info */
   const char* sakuin_stats(void);
@@ -213,16 +207,6 @@ function M.shutdown()
 end
 
 ---@return number
-function M.build_index()
-	return get_lib().sakuin_build_index()
-end
-
----@return number
-function M.update_index()
-	return get_lib().sakuin_update_index()
-end
-
----@return number
 function M.start_watcher()
 	return get_lib().sakuin_start_watcher()
 end
@@ -280,28 +264,6 @@ function M.search_cancel()
 	get_lib().sakuin_search_cancel()
 end
 
--- Synchronous search — blocks the caller.
----@param query string
----@return table|nil results
----@return string|nil error
-function M.search(query)
-	local l = get_lib()
-	local raw = l.sakuin_search(query)
-	if raw == nil then
-		return nil, M.last_error() or "search returned null"
-	end
-
-	local json_str = ffi.string(raw)
-	l.sakuin_free_string(raw)
-
-	local ok, decoded = pcall(vim.json.decode, json_str)
-	if not ok then
-		return nil, "Failed to decode search results: " .. tostring(decoded)
-	end
-
-	return decoded, nil
-end
-
 ---@return table|nil stats
 ---@return string|nil error
 function M.stats()
@@ -330,26 +292,6 @@ end
 ---@return number
 function M.update_index_async()
 	return get_lib().sakuin_update_index_async()
-end
-
----@return table|nil progress {total, done, status}
----@return string|nil error
-function M.get_progress()
-	local l = get_lib()
-	local raw = l.sakuin_get_progress()
-	if raw == nil then
-		return nil, M.last_error() or "get_progress returned null"
-	end
-
-	local json_str = ffi.string(raw)
-	l.sakuin_free_string(raw)
-
-	local ok, decoded = pcall(vim.json.decode, json_str)
-	if not ok then
-		return nil, "Failed to decode progress: " .. tostring(decoded)
-	end
-
-	return decoded, nil
 end
 
 ---@return string|nil

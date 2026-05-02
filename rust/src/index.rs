@@ -28,7 +28,7 @@ pub fn build_schema() -> Schema {
         .set_stored();
     builder.add_text_field(FIELD_PATH, code_text_options.clone());
 
-    // Exact (untokenized) copy of the path — used for delete-by-path and
+    // Exact (untokenized) copy of the path, used for delete-by-path and
     // mtime lookups. STRING = exact match, STORED so we can read it back.
     builder.add_text_field(FIELD_PATH_EXACT, STRING | STORED);
 
@@ -115,13 +115,18 @@ pub fn create_reader(index: &Index) -> Result<IndexReader, String> {
         .map_err(|e| format!("Failed to create IndexReader: {}", e))
 }
 
-/// Caller must delete any existing document for this path before calling.
-pub fn index_file(
-    writer: &IndexWriter,
-    schema: &Schema,
-    project_root: &Path,
-    file_path: &Path,
-) -> Result<(), String> {
+// A pre-read document. Split from `add_prepared_doc` so the CPU/IO-heavy read
+// can run in parallel (Rayon) while the writer is touched only briefly.
+pub struct PreparedDoc {
+    pub relative: String,
+    pub filename: String,
+    pub extension: String,
+    pub body: String,
+    pub modified: u64,
+    pub size: u64,
+}
+
+pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
     let relative = file_path
         .strip_prefix(project_root)
         .unwrap_or(file_path)
@@ -153,6 +158,21 @@ pub fn index_file(
     let body = fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
 
+    Ok(PreparedDoc {
+        relative,
+        filename,
+        extension,
+        body,
+        modified,
+        size,
+    })
+}
+
+pub fn add_prepared_doc(
+    writer: &IndexWriter,
+    schema: &Schema,
+    doc: PreparedDoc,
+) -> Result<(), String> {
     let path_field = schema.get_field(FIELD_PATH).unwrap();
     let path_exact_field = schema.get_field(FIELD_PATH_EXACT).unwrap();
     let filename_field = schema.get_field(FIELD_FILENAME).unwrap();
@@ -163,17 +183,28 @@ pub fn index_file(
 
     writer
         .add_document(doc!(
-            path_field => relative.clone(),
-            path_exact_field => relative,
-            filename_field => filename,
-            extension_field => extension,
-            body_field => body,
-            modified_field => modified,
-            size_field => size,
+            path_field => doc.relative.clone(),
+            path_exact_field => doc.relative,
+            filename_field => doc.filename,
+            extension_field => doc.extension,
+            body_field => doc.body,
+            modified_field => doc.modified,
+            size_field => doc.size,
         ))
         .map_err(|e| format!("Failed to add document: {}", e))?;
 
     Ok(())
+}
+
+/// Caller must delete any existing document for this path before calling.
+pub fn index_file(
+    writer: &IndexWriter,
+    schema: &Schema,
+    project_root: &Path,
+    file_path: &Path,
+) -> Result<(), String> {
+    let doc = prepare_doc(project_root, file_path)?;
+    add_prepared_doc(writer, schema, doc)
 }
 
 pub fn delete_by_path(writer: &IndexWriter, schema: &Schema, relative_path: &str) {

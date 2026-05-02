@@ -15,7 +15,6 @@ pub struct GitChanges {
     pub deleted: Vec<PathBuf>,
 }
 
-/// Returns true if `path` is inside a `.git/` directory.
 pub fn is_git_internal_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == ".git")
 }
