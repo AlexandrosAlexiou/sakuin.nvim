@@ -31,6 +31,10 @@ function M.sakuin(opts)
 			local pending_items = {} ---@type snacks.picker.finder.Item[]
 			local error_msg = nil ---@type string?
 
+			-- Yield periodically so the event loop can process input/rendering.
+			local Async = require("snacks.picker.util.async")
+			local yield = Async.yielder()
+
 			sakuin_ffi.register_search_callback(my_gen, function(msg_type, results, err)
 				if msg_type == "batch" and results then
 					for _, r in ipairs(results) do
@@ -72,6 +76,7 @@ function M.sakuin(opts)
 					pending_items = {}
 					for _, item in ipairs(items) do
 						callback(item)
+						yield()
 					end
 				end
 
@@ -82,6 +87,7 @@ function M.sakuin(opts)
 
 			for _, item in ipairs(pending_items) do
 				callback(item)
+				yield()
 			end
 
 			-- Defensive cleanup.
