@@ -139,8 +139,15 @@ function M.load()
 
 	lib = ffi.load(lib_path)
 
+	local schedule_pending = false
 	async_handle = vim.uv.new_async(function()
-		vim.schedule(on_async_notification)
+		if not schedule_pending then
+			schedule_pending = true
+			vim.schedule(function()
+				schedule_pending = false
+				on_async_notification()
+			end)
+		end
 	end)
 
 	-- luv userdata is a void** to the raw uv_async_t*; dereference once.
