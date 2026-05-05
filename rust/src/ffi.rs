@@ -65,3 +65,158 @@ where
         }
     }
 }
+
+// ─── C-ABI structs ──────────────────────────────────────────────────────────
+
+/// A single search result, C-compatible layout.
+/// All string pointers are owned and must be freed via `sakuin_free_search_message`.
+#[repr(C)]
+pub struct CSearchResult {
+    pub path: *const c_char,
+    pub snippet: *const c_char,
+    pub line: u32,
+    pub col: u32,
+    pub score: f32,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CSearchMessageType {
+    Batch = 0,
+    Done = 1,
+    Error = 2,
+}
+
+/// A search result message returned from the queue.
+/// - For `Batch`: `results` and `results_len` are populated, `error` is null.
+/// - For `Done`: `results` is null, `results_len` is 0, `error` is null.
+/// - For `Error`: `results` is null, `error` is non-null.
+#[repr(C)]
+pub struct CSearchMessage {
+    pub msg_type: CSearchMessageType,
+    pub generation: u64,
+    pub total: u64,
+    pub results: *mut CSearchResult,
+    pub results_len: u32,
+    pub error: *const c_char,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CIndexingStatus {
+    Done = 0,
+    Error = 1,
+    Progress = 2,
+}
+
+#[repr(C)]
+pub struct CIndexingEvent {
+    pub status: CIndexingStatus,
+    pub total: u64,
+    pub done: u64,
+    pub error: *const c_char,   // null if no error
+    pub message: *const c_char, // null if no message
+}
+
+#[repr(C)]
+pub struct CIndexStats {
+    pub num_docs: u64,
+    pub num_segments: u32,
+    pub index_size_bytes: u64,
+    pub project_root: *const c_char,
+}
+
+impl CSearchMessage {
+    pub fn from_internal(msg: crate::state::SearchResultMessage) -> Self {
+        use crate::state::SearchResultMessage;
+        match msg {
+            SearchResultMessage::Batch {
+                generation,
+                results,
+                total_so_far,
+            } => {
+                let len = results.len() as u32;
+                let c_results: Vec<CSearchResult> = results
+                    .into_iter()
+                    .map(|r| CSearchResult {
+                        path: str_to_c(&r.path),
+                        snippet: str_to_c(&r.snippet),
+                        line: r.line,
+                        col: r.col,
+                        score: r.score,
+                    })
+                    .collect();
+                let ptr = if c_results.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    let mut boxed = c_results.into_boxed_slice();
+                    let ptr = boxed.as_mut_ptr();
+                    std::mem::forget(boxed);
+                    ptr
+                };
+                CSearchMessage {
+                    msg_type: CSearchMessageType::Batch,
+                    generation,
+                    total: total_so_far,
+                    results: ptr,
+                    results_len: len,
+                    error: std::ptr::null(),
+                }
+            }
+            SearchResultMessage::Done { generation, total } => CSearchMessage {
+                msg_type: CSearchMessageType::Done,
+                generation,
+                total,
+                results: std::ptr::null_mut(),
+                results_len: 0,
+                error: std::ptr::null(),
+            },
+            SearchResultMessage::Error { generation, error } => CSearchMessage {
+                msg_type: CSearchMessageType::Error,
+                generation,
+                total: 0,
+                results: std::ptr::null_mut(),
+                results_len: 0,
+                error: str_to_c(&error),
+            },
+        }
+    }
+}
+
+impl CIndexingEvent {
+    pub fn from_internal(ev: crate::state::IndexingEvent) -> Self {
+        let status = match ev.status {
+            "done" => CIndexingStatus::Done,
+            "error" => CIndexingStatus::Error,
+            _ => CIndexingStatus::Progress,
+        };
+        CIndexingEvent {
+            status,
+            total: ev.total,
+            done: ev.done,
+            error: ev.error.map_or(std::ptr::null(), |e| str_to_c(&e)),
+            message: ev
+                .message
+                .map_or(std::ptr::null(), |m| match CString::new(m) {
+                    Ok(cs) => cs.into_raw() as *const c_char,
+                    Err(_) => {
+                        set_last_error(
+                            "String contains null byte, cannot convert to C string".into(),
+                        );
+                        std::ptr::null()
+                    }
+                }),
+        }
+    }
+}
+
+impl CIndexStats {
+    pub fn from_internal(stats: crate::types::IndexStats) -> Self {
+        CIndexStats {
+            num_docs: stats.num_docs,
+            num_segments: stats.num_segments as u32,
+            index_size_bytes: stats.index_size_bytes,
+            project_root: str_to_c(&stats.project_root),
+        }
+    }
+}

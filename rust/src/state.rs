@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use serde::Serialize;
+
 use tantivy::schema::Schema;
 use tantivy::{Executor, Index, IndexReader, IndexWriter};
 
@@ -451,14 +451,11 @@ where
 // thread. This avoids the SEGV caused by calling a LuaJIT `ffi.cast` callback
 // from a non-Lua thread.
 
-#[derive(Serialize)]
 pub struct IndexingEvent {
     pub status: &'static str,
     pub total: u64,
     pub done: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<&'static str>,
 }
 
@@ -477,8 +474,6 @@ pub fn push_indexing_event(event: IndexingEvent) {
     notify_main_thread();
 }
 
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
 pub enum SearchResultMessage {
     Batch {
         generation: u64,

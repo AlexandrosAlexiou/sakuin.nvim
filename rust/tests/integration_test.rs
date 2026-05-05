@@ -135,12 +135,10 @@ fn test_init_and_shutdown() {
     // Stats
     let stats_ptr = sakuin::sakuin_stats();
     assert!(!stats_ptr.is_null(), "sakuin_stats should return non-null");
-    let stats_json = unsafe { CStr::from_ptr(stats_ptr) }.to_str().unwrap();
-    let stats: serde_json::Value = serde_json::from_str(stats_json).unwrap();
-    sakuin::sakuin_free_string(stats_ptr);
+    let num_docs = unsafe { (*stats_ptr).num_docs };
+    sakuin::sakuin_free_stats(stats_ptr);
 
     // We should have indexed at least 3-4 text files (not the binary)
-    let num_docs = stats["num_docs"].as_u64().unwrap();
     assert!(num_docs >= 3, "Expected at least 3 docs, got {}", num_docs);
     assert!(num_docs <= 5, "Expected at most 5 docs, got {}", num_docs);
 
@@ -253,34 +251,24 @@ fn test_async_search_with_result_slot() {
             break;
         }
 
-        let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-        let msg: serde_json::Value = serde_json::from_str(result_json).unwrap();
-        sakuin::sakuin_free_string(result_ptr);
+        let msg = unsafe { &*result_ptr };
+        assert_eq!(msg.generation, 42, "Generation should match");
 
-        assert_eq!(
-            msg["generation"].as_u64().unwrap(),
-            42,
-            "Generation should match"
-        );
-
-        let msg_type = msg["type"].as_str().unwrap();
-        match msg_type {
-            "batch" => {
-                let results = msg["results"].as_array().unwrap();
-                assert!(!results.is_empty(), "Batch should have results");
-                total_results += results.len();
+        match msg.msg_type {
+            sakuin::ffi::CSearchMessageType::Batch => {
+                assert!(msg.results_len > 0, "Batch should have results");
+                total_results += msg.results_len as usize;
                 got_results = true;
             }
-            "done" => {
+            sakuin::ffi::CSearchMessageType::Done => {
                 got_done = true;
             }
-            "error" => {
-                panic!("Unexpected error message: {}", msg["error"]);
-            }
-            _ => {
-                panic!("Unknown message type: {}", msg_type);
+            sakuin::ffi::CSearchMessageType::Error => {
+                let err = unsafe { std::ffi::CStr::from_ptr(msg.error) }.to_str().unwrap();
+                panic!("Unexpected error message: {}", err);
             }
         }
+        sakuin::sakuin_free_search_message(result_ptr);
     }
 
     assert!(
@@ -821,7 +809,7 @@ fn test_init_with_invalid_config_json() {
 // ============================================================================
 
 /// Poll until an indexing event with status "done" arrives, or panic on timeout.
-fn wait_for_indexing_done(timeout: std::time::Duration) -> serde_json::Value {
+fn wait_for_indexing_done(timeout: std::time::Duration) -> (u64, u64) {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         assert!(
@@ -837,13 +825,21 @@ fn wait_for_indexing_done(timeout: std::time::Duration) -> serde_json::Value {
             continue;
         }
 
-        let event_json = unsafe { CStr::from_ptr(event_ptr) }.to_str().unwrap();
-        let event: serde_json::Value = serde_json::from_str(event_json).unwrap();
-        sakuin::sakuin_free_string(event_ptr);
+        let event = unsafe { &*event_ptr };
+        let total = event.total;
+        let done = event.done;
+        let status = event.status;
+        let has_error = !event.error.is_null();
+        let error_msg = if has_error {
+            unsafe { std::ffi::CStr::from_ptr(event.error) }.to_str().unwrap().to_string()
+        } else {
+            String::new()
+        };
+        sakuin::sakuin_free_indexing_event(event_ptr);
 
-        match event["status"].as_str().unwrap_or("") {
-            "done" => return event,
-            "error" => panic!("Async indexing error: {}", event),
+        match status {
+            sakuin::ffi::CIndexingStatus::Done => return (total, done),
+            sakuin::ffi::CIndexingStatus::Error => panic!("Async indexing error: {}", error_msg),
             _ => {} // progress — keep polling
         }
     }
@@ -866,11 +862,11 @@ fn test_async_build_index() {
     let rc = sakuin::sakuin_build_index_async();
     assert_eq!(rc, 0, "sakuin_build_index_async should succeed");
 
-    let event = wait_for_indexing_done(std::time::Duration::from_secs(10));
+    let (_total, done) = wait_for_indexing_done(std::time::Duration::from_secs(10));
     assert!(
-        event["done"].as_u64().unwrap() >= 3,
+        done >= 3,
         "Expected at least 3 files indexed in done event, got: {}",
-        event
+        done
     );
 
     // Index should be usable after async build.
@@ -906,8 +902,7 @@ fn test_async_update_index() {
     let rc = sakuin::sakuin_update_index_async();
     assert_eq!(rc, 0, "sakuin_update_index_async should succeed");
 
-    let event = wait_for_indexing_done(std::time::Duration::from_secs(10));
-    assert_eq!(event["status"].as_str().unwrap(), "done");
+    let _event = wait_for_indexing_done(std::time::Duration::from_secs(10));
 
     // The new file should now be searchable.
     let results = sync_search("xyzzy");
@@ -987,16 +982,13 @@ fn test_search_cancel() {
     // Give the worker time to process the cancellation.
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Draining the queue after cancel must not crash or produce invalid JSON.
+    // Draining the queue after cancel must not crash or produce invalid data.
     loop {
         let ptr = sakuin::sakuin_search_take_result();
         if ptr.is_null() {
             break;
         }
-        let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
-        let _msg: serde_json::Value =
-            serde_json::from_str(json).expect("Result message should be valid JSON");
-        sakuin::sakuin_free_string(ptr);
+        sakuin::sakuin_free_search_message(ptr);
     }
 
     sakuin::sakuin_shutdown();

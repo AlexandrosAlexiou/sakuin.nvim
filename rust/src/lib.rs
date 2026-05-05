@@ -1,4 +1,4 @@
-mod ffi;
+pub mod ffi;
 pub(crate) mod git;
 mod index;
 mod logging;
@@ -118,15 +118,25 @@ mod ffi_exports {
         })
     }
 
-    /// Returns NULL if no event is pending. Caller MUST free with `sakuin_free_string`.
+    /// Returns NULL if no event is pending. Caller MUST free with `sakuin_free_indexing_event`.
     #[no_mangle]
-    pub extern "C" fn sakuin_indexing_take_event() -> *const c_char {
+    pub extern "C" fn sakuin_indexing_take_event() -> *mut ffi::CIndexingEvent {
         match state::indexing_take_event() {
-            Some(ev) => match serde_json::to_string(&ev) {
-                Ok(json) => ffi::str_to_c(&json),
-                Err(_) => std::ptr::null(),
-            },
-            None => std::ptr::null(),
+            Some(ev) => Box::into_raw(Box::new(ffi::CIndexingEvent::from_internal(ev))),
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// Free an indexing event returned by `sakuin_indexing_take_event`.
+    #[no_mangle]
+    pub extern "C" fn sakuin_free_indexing_event(ptr: *mut ffi::CIndexingEvent) {
+        if ptr.is_null() {
+            return;
+        }
+        unsafe {
+            let ev = Box::from_raw(ptr);
+            ffi::free_c_string(ev.error);
+            ffi::free_c_string(ev.message);
         }
     }
 
@@ -160,15 +170,34 @@ mod ffi_exports {
         state::register_async_notifier(handle_ptr, send_fn_ptr);
     }
 
-    /// Returns NULL if the queue is empty. Caller MUST free with `sakuin_free_string`.
+    /// Returns NULL if the queue is empty. Caller MUST free with `sakuin_free_search_message`.
     #[no_mangle]
-    pub extern "C" fn sakuin_search_take_result() -> *const c_char {
+    pub extern "C" fn sakuin_search_take_result() -> *mut ffi::CSearchMessage {
         match state::search_take_result() {
-            Some(msg) => match serde_json::to_string(&msg) {
-                Ok(json) => ffi::str_to_c(&json),
-                Err(_) => std::ptr::null(),
-            },
-            None => std::ptr::null(),
+            Some(msg) => Box::into_raw(Box::new(ffi::CSearchMessage::from_internal(msg))),
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// Free a search message returned by `sakuin_search_take_result`.
+    #[no_mangle]
+    pub extern "C" fn sakuin_free_search_message(ptr: *mut ffi::CSearchMessage) {
+        if ptr.is_null() {
+            return;
+        }
+        unsafe {
+            let msg = Box::from_raw(ptr);
+            // Free error string if present
+            ffi::free_c_string(msg.error);
+            // Free results array and its strings
+            if !msg.results.is_null() && msg.results_len > 0 {
+                let results =
+                    Vec::from_raw_parts(msg.results, msg.results_len as usize, msg.results_len as usize);
+                for r in results {
+                    ffi::free_c_string(r.path);
+                    ffi::free_c_string(r.snippet);
+                }
+            }
         }
     }
 
@@ -205,23 +234,29 @@ mod ffi_exports {
         state::search_cancel();
     }
 
-    /// Get index statistics as JSON.
+    /// Get index statistics as a C struct.
     ///
-    /// Returns NULL on error. Caller MUST free with `sakuin_free_string`.
+    /// Returns NULL on error. Caller MUST free with `sakuin_free_stats`.
     #[no_mangle]
-    pub extern "C" fn sakuin_stats() -> *const c_char {
+    pub extern "C" fn sakuin_stats() -> *mut ffi::CIndexStats {
         match state::stats() {
-            Ok(stats) => match serde_json::to_string(&stats) {
-                Ok(json) => ffi::str_to_c(&json),
-                Err(e) => {
-                    ffi::set_last_error(format!("JSON serialization failed: {}", e));
-                    std::ptr::null()
-                }
-            },
+            Ok(stats) => Box::into_raw(Box::new(ffi::CIndexStats::from_internal(stats))),
             Err(e) => {
                 ffi::set_last_error(e);
-                std::ptr::null()
+                std::ptr::null_mut()
             }
+        }
+    }
+
+    /// Free a stats struct returned by `sakuin_stats`.
+    #[no_mangle]
+    pub extern "C" fn sakuin_free_stats(ptr: *mut ffi::CIndexStats) {
+        if ptr.is_null() {
+            return;
+        }
+        unsafe {
+            let stats = Box::from_raw(ptr);
+            ffi::free_c_string(stats.project_root);
         }
     }
 
