@@ -10,39 +10,65 @@
 local ffi = require("ffi")
 
 ffi.cdef([[
-  /* Lifecycle */
+  typedef struct {
+    const char* path;
+    const char* snippet;
+    uint32_t    line;
+    uint32_t    col;
+    float       score;
+  } SakuinSearchResult;
+
+  typedef struct {
+    uint8_t     msg_type;
+    uint64_t    generation;
+    uint64_t    total;
+    SakuinSearchResult* results;
+    uint32_t    results_len;
+    const char* error;
+  } SakuinSearchMessage;
+
+  typedef struct {
+    uint8_t     status;
+    uint64_t    total;
+    uint64_t    done;
+    const char* error;
+    const char* message;
+  } SakuinIndexingEvent;
+
+  typedef struct {
+    uint64_t    num_docs;
+    uint32_t    num_segments;
+    uint64_t    index_size_bytes;
+    const char* project_root;
+  } SakuinIndexStats;
+
   int         sakuin_init(const char* project_root, const char* index_dir, const char* config_json);
   void        sakuin_shutdown(void);
 
-  /* Indexing */
   int         sakuin_build_index_async(void);
   int         sakuin_update_index_async(void);
 
-  /* Watcher */
   int         sakuin_start_watcher(void);
   void        sakuin_stop_watcher(void);
 
-  /* Search — async with result queue + uv_async notification */
-  void        sakuin_register_async_notifier(void* handle_ptr, void* send_fn_ptr);
-  const char* sakuin_search_take_result(void);
-  int         sakuin_search_submit(const char* query, uint64_t generation, uint64_t limit);
-  void        sakuin_search_cancel(void);
+  void                    sakuin_register_async_notifier(void* handle_ptr, void* send_fn_ptr);
+  SakuinSearchMessage*    sakuin_search_take_result(void);
+  void                    sakuin_free_search_message(SakuinSearchMessage* ptr);
+  int                     sakuin_search_submit(const char* query, uint64_t generation, uint64_t limit);
+  void                    sakuin_search_cancel(void);
 
-  /* Indexing completion event (pushed via uv_async_send, same channel as search) */
-  const char* sakuin_indexing_take_event(void);
+  SakuinIndexingEvent*    sakuin_indexing_take_event(void);
+  void                    sakuin_free_indexing_event(SakuinIndexingEvent* ptr);
 
-  /* Info */
-  const char* sakuin_stats(void);
-  const char* sakuin_last_error(void);
+  SakuinIndexStats*       sakuin_stats(void);
+  void                    sakuin_free_stats(SakuinIndexStats* ptr);
+  const char*             sakuin_last_error(void);
 
-  /* Memory */
   void        sakuin_free_string(const char* s);
 
-  /* Logging */
   int         sakuin_set_log_level(const char* level);
   void        sakuin_clear_logs(void);
 
-  /* libuv — we only need the send function pointer */
   int         uv_async_send(void* handle);
 ]])
 
@@ -82,6 +108,66 @@ local function resolve_lib_path()
 	return plugin_root .. "/build/" .. prefix .. "sakuin" .. ext
 end
 
+--- Convert a CSearchMessage pointer to Lua-friendly data and free it.
+local function decode_search_message(ptr)
+	local msg_type = tonumber(ptr.msg_type)
+	local generation = tonumber(ptr.generation)
+
+	if msg_type == 0 then -- Batch
+		local results = {}
+		local len = tonumber(ptr.results_len)
+		for i = 0, len - 1 do
+			local r = ptr.results[i]
+			results[#results + 1] = {
+				path = ffi.string(r.path),
+				snippet = ffi.string(r.snippet),
+				line = tonumber(r.line),
+				col = tonumber(r.col),
+				score = tonumber(r.score),
+			}
+		end
+		local total = tonumber(ptr.total)
+		lib.sakuin_free_search_message(ptr)
+		return "batch", generation, results, total
+	elseif msg_type == 1 then -- Done
+		local total = tonumber(ptr.total)
+		lib.sakuin_free_search_message(ptr)
+		return "done", generation, nil, total
+	else -- Error
+		local err = ptr.error ~= nil and ffi.string(ptr.error) or "unknown error"
+		lib.sakuin_free_search_message(ptr)
+		return "error", generation, err, nil
+	end
+end
+
+--- Convert a CIndexingEvent pointer to a Lua table and free it.
+local function decode_indexing_event(ptr)
+	local status_code = tonumber(ptr.status)
+	local status
+	if status_code == 0 then
+		status = "done"
+	elseif status_code == 1 then
+		status = "error"
+	else
+		status = "progress"
+	end
+
+	local event = {
+		status = status,
+		total = tonumber(ptr.total),
+		done = tonumber(ptr.done),
+	}
+	if ptr.error ~= nil then
+		event.error = ffi.string(ptr.error)
+	end
+	if ptr.message ~= nil then
+		event.message = ffi.string(ptr.message)
+	end
+
+	lib.sakuin_free_indexing_event(ptr)
+	return event
+end
+
 local function on_async_notification()
 	if not lib then
 		return
@@ -89,10 +175,8 @@ local function on_async_notification()
 
 	local idx_raw = lib.sakuin_indexing_take_event()
 	if idx_raw ~= nil then
-		local json_str = ffi.string(idx_raw)
-		lib.sakuin_free_string(idx_raw)
-		local ok, event = pcall(vim.json.decode, json_str)
-		if ok and lua_indexing_callback then
+		local event = decode_indexing_event(idx_raw)
+		if lua_indexing_callback then
 			lua_indexing_callback(event)
 		end
 	end
@@ -103,21 +187,17 @@ local function on_async_notification()
 			break
 		end
 
-		local json_str = ffi.string(raw)
-		lib.sakuin_free_string(raw)
-
-		local ok, msg = pcall(vim.json.decode, json_str)
-		local callback = ok and search_callbacks[msg.generation]
+		local msg_type, generation, data, total = decode_search_message(raw)
+		local callback = search_callbacks[generation]
 		if callback then
-			local msg_type = msg.type
 			if msg_type == "batch" then
-				callback("batch", msg.results, nil, msg.total_so_far)
+				callback("batch", data, nil, total)
 			elseif msg_type == "done" then
-				search_callbacks[msg.generation] = nil
-				callback("done", nil, nil, msg.total)
+				search_callbacks[generation] = nil
+				callback("done", nil, nil, total)
 			elseif msg_type == "error" then
-				search_callbacks[msg.generation] = nil
-				callback("error", nil, msg.error, nil)
+				search_callbacks[generation] = nil
+				callback("error", nil, data, nil)
 			end
 		end
 	end
@@ -257,15 +337,15 @@ function M.stats()
 		return nil, M.last_error() or "stats returned null"
 	end
 
-	local json_str = ffi.string(raw)
-	l.sakuin_free_string(raw)
+	local stats = {
+		num_docs = tonumber(raw.num_docs),
+		num_segments = tonumber(raw.num_segments),
+		index_size_bytes = tonumber(raw.index_size_bytes),
+		project_root = ffi.string(raw.project_root),
+	}
+	l.sakuin_free_stats(raw)
 
-	local ok, decoded = pcall(vim.json.decode, json_str)
-	if not ok then
-		return nil, "Failed to decode stats: " .. tostring(decoded)
-	end
-
-	return decoded, nil
+	return stats, nil
 end
 
 ---@return number
