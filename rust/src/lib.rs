@@ -191,8 +191,11 @@ mod ffi_exports {
             ffi::free_c_string(msg.error);
             // Free results array and its strings
             if !msg.results.is_null() && msg.results_len > 0 {
-                let results =
-                    Vec::from_raw_parts(msg.results, msg.results_len as usize, msg.results_len as usize);
+                let results = Vec::from_raw_parts(
+                    msg.results,
+                    msg.results_len as usize,
+                    msg.results_len as usize,
+                );
                 for r in results {
                     ffi::free_c_string(r.path);
                     ffi::free_c_string(r.snippet);
