@@ -264,7 +264,9 @@ fn test_async_search_with_result_slot() {
                 got_done = true;
             }
             sakuin::ffi::CSearchMessageType::Error => {
-                let err = unsafe { std::ffi::CStr::from_ptr(msg.error) }.to_str().unwrap();
+                let err = unsafe { std::ffi::CStr::from_ptr(msg.error) }
+                    .to_str()
+                    .unwrap();
                 panic!("Unexpected error message: {}", err);
             }
         }
@@ -831,7 +833,10 @@ fn wait_for_indexing_done(timeout: std::time::Duration) -> (u64, u64) {
         let status = event.status;
         let has_error = !event.error.is_null();
         let error_msg = if has_error {
-            unsafe { std::ffi::CStr::from_ptr(event.error) }.to_str().unwrap().to_string()
+            unsafe { std::ffi::CStr::from_ptr(event.error) }
+                .to_str()
+                .unwrap()
+                .to_string()
         } else {
             String::new()
         };
