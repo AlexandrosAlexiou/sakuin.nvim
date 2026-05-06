@@ -30,14 +30,14 @@ pub unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
 }
 
 /// The caller is responsible for freeing this with `sakuin_free_string`.
+///
+/// Interior NUL bytes are stripped: snippets pulled from text files can
+/// contain `\0`, and returning a null pointer would crash `ffi.string` on
+/// the Lua side.
 pub fn str_to_c(s: &str) -> *const c_char {
-    match CString::new(s) {
-        Ok(cs) => cs.into_raw() as *const c_char,
-        Err(_) => {
-            set_last_error("String contains null byte, cannot convert to C string".into());
-            std::ptr::null()
-        }
-    }
+    let bytes: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
+    let cs = unsafe { CString::from_vec_unchecked(bytes) };
+    cs.into_raw() as *const c_char
 }
 
 /// # Safety
@@ -195,17 +195,7 @@ impl CIndexingEvent {
             total: ev.total,
             done: ev.done,
             error: ev.error.map_or(std::ptr::null(), |e| str_to_c(&e)),
-            message: ev
-                .message
-                .map_or(std::ptr::null(), |m| match CString::new(m) {
-                    Ok(cs) => cs.into_raw() as *const c_char,
-                    Err(_) => {
-                        set_last_error(
-                            "String contains null byte, cannot convert to C string".into(),
-                        );
-                        std::ptr::null()
-                    }
-                }),
+            message: ev.message.map_or(std::ptr::null(), str_to_c),
         }
     }
 }

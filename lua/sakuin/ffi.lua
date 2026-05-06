@@ -108,6 +108,14 @@ local function resolve_lib_path()
 	return plugin_root .. "/build/" .. prefix .. "sakuin" .. ext
 end
 
+-- ffi.string segfaults on NULL (calls strlen).
+local function safe_str(p)
+	if p == nil then
+		return ""
+	end
+	return ffi.string(p)
+end
+
 --- Convert a CSearchMessage pointer to Lua-friendly data and free it.
 local function decode_search_message(ptr)
 	local msg_type = tonumber(ptr.msg_type)
@@ -119,8 +127,8 @@ local function decode_search_message(ptr)
 		for i = 0, len - 1 do
 			local r = ptr.results[i]
 			results[#results + 1] = {
-				path = ffi.string(r.path),
-				snippet = ffi.string(r.snippet),
+				path = safe_str(r.path),
+				snippet = safe_str(r.snippet),
 				line = tonumber(r.line),
 				col = tonumber(r.col),
 				score = tonumber(r.score),
