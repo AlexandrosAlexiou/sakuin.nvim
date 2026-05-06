@@ -43,9 +43,14 @@ function M.sakuin(opts)
 			local done = false
 			local error_msg = nil ---@type string?
 
+			local pending = {} ---@type table[]
+			local yield = require("snacks.picker.util.async").yielder()
+
 			sakuin_ffi.register_search_callback(my_gen, function(msg_type, results, err)
 				if msg_type == "batch" and results then
-					emit_items(results, callback)
+					for _, r in ipairs(results) do
+						pending[#pending + 1] = r
+					end
 				elseif msg_type == "done" then
 					done = true
 				elseif msg_type == "error" then
@@ -67,7 +72,19 @@ function M.sakuin(opts)
 			end
 
 			while not done do
-				ctx.async:suspend()
+				if #pending > 0 then
+					local batch = pending
+					pending = {}
+					emit_items(batch, callback)
+					yield()
+				end
+				if not done then
+					ctx.async:suspend()
+				end
+			end
+
+			if #pending > 0 then
+				emit_items(pending, callback)
 			end
 
 			sakuin_ffi.unregister_search_callback(my_gen)
