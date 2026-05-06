@@ -13,6 +13,20 @@ function M.sakuin(opts)
 	-- Bumped on every new search; ffi dispatcher uses it to drop stale batches.
 	local generation = 0
 
+	--- Convert raw ffi results to picker items and pass them to callback.
+	local function emit_items(results, callback)
+		for _, r in ipairs(results) do
+			local col = r.col - 1 -- 0-indexed for snacks
+			callback({
+				file = r.path,
+				text = r.path .. ":" .. r.line .. ":" .. col .. ":" .. r.snippet,
+				pos = { r.line, col },
+				line = r.snippet,
+				score_offset = r.score,
+			})
+		end
+	end
+
 	---@param ctx snacks.picker.finder.ctx
 	---@return snacks.picker.finder.async
 	---@diagnostic disable-next-line: unused-local
@@ -27,35 +41,18 @@ function M.sakuin(opts)
 			generation = generation + 1
 			local my_gen = generation
 			local done = false
-
-			local pending_items = {} ---@type snacks.picker.finder.Item[]
 			local error_msg = nil ---@type string?
-
-			-- Yield periodically so the event loop can process input/rendering.
-			local Async = require("snacks.picker.util.async")
-			local yield = Async.yielder()
 
 			sakuin_ffi.register_search_callback(my_gen, function(msg_type, results, err)
 				if msg_type == "batch" and results then
-					for _, r in ipairs(results) do
-						local col_nr = r.col - 1 -- 0-indexed for snacks
-						pending_items[#pending_items + 1] = {
-							file = r.path,
-							text = r.path .. ":" .. r.line .. ":" .. col_nr .. ":" .. r.snippet,
-							pos = { r.line, col_nr },
-							line = r.snippet,
-							score_offset = r.score,
-						}
-					end
-					ctx.async:resume()
+					emit_items(results, callback)
 				elseif msg_type == "done" then
 					done = true
-					ctx.async:resume()
 				elseif msg_type == "error" then
 					error_msg = err or "unknown"
 					done = true
-					ctx.async:resume()
 				end
+				ctx.async:resume()
 			end)
 
 			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
@@ -69,28 +66,10 @@ function M.sakuin(opts)
 				return
 			end
 
-			-- Yield until done; resumed by search callback on each event.
 			while not done do
-				if #pending_items > 0 then
-					local items = pending_items
-					pending_items = {}
-					for _, item in ipairs(items) do
-						callback(item)
-						yield()
-					end
-				end
-
-				if not done then
-					ctx.async:suspend()
-				end
+				ctx.async:suspend()
 			end
 
-			for _, item in ipairs(pending_items) do
-				callback(item)
-				yield()
-			end
-
-			-- Defensive cleanup.
 			sakuin_ffi.unregister_search_callback(my_gen)
 
 			if error_msg then
