@@ -76,6 +76,51 @@ local function init_engine(config)
 	return ffi_mod
 end
 
+--- Shut down the current engine and reinitialize for a new working directory.
+--- If the new cwd has an existing index, runs an incremental update + starts watcher.
+---@param config table
+local function reinit_engine(config)
+	local ffi_mod = require("sakuin.ffi")
+	if not ffi_mod.is_loaded() then
+		return
+	end
+
+	local root = vim.fn.getcwd()
+	local index_dir = root .. "/.sakuin"
+	local rust_config = vim.json.encode({
+		max_file_size = config.max_file_size,
+		ignore_patterns = config.ignore_patterns or {},
+		include_extensions = config.include_extensions,
+		respect_gitignore = config.respect_gitignore ~= false,
+		log_level = config.log_level or "info",
+		log_file = config.log_file,
+	})
+
+	local rc = ffi_mod.reinit(root, index_dir, rust_config)
+	if rc ~= 0 then
+		vim.notify(
+			"[sakuin] Failed to reinitialize: " .. (ffi_mod.last_error() or "unknown error"),
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
+	if vim.fn.isdirectory(index_dir) == 1 then
+		if config.update_on_start then
+			local update_rc = ffi_mod.update_index_async()
+			if update_rc == 0 then
+				watch_indexing(ffi_mod, "Syncing", function()
+					start_watcher_if_enabled(ffi_mod, config)
+				end)
+			else
+				start_watcher_if_enabled(ffi_mod, config)
+			end
+		else
+			start_watcher_if_enabled(ffi_mod, config)
+		end
+	end
+end
+
 -- Skips if no .sakuin/ exists (user must :SakuinBuild first).
 ---@param config table
 local function deferred_startup(config)
@@ -119,6 +164,18 @@ function M.setup(opts)
 			end
 		end,
 		desc = "Shut down sakuin engine on exit",
+	})
+
+	vim.api.nvim_create_autocmd("DirChanged", {
+		callback = function()
+			local ffi_mod = require("sakuin.ffi")
+			if ffi_mod.is_loaded() then
+				reinit_engine(config)
+			else
+				deferred_startup(config)
+			end
+		end,
+		desc = "Reinitialize sakuin index for new working directory",
 	})
 
 	if type(config.keymaps) == "table" then
@@ -179,6 +236,24 @@ function M.async_index(mode)
 		end)
 	else
 		vim.notify("[sakuin] Failed to start: " .. (ffi_mod.last_error() or "unknown"), vim.log.levels.ERROR)
+	end
+end
+
+--- Delete the .sakuin/ index directory.
+function M.clean()
+	local ffi_mod = require("sakuin.ffi")
+
+	-- Shut down the engine first if running (releases file handles on the index)
+	if ffi_mod.is_loaded() then
+		ffi_mod.shutdown()
+	end
+
+	local index_dir = vim.fn.getcwd() .. "/.sakuin"
+	if vim.fn.isdirectory(index_dir) == 1 then
+		vim.fn.delete(index_dir, "rf")
+		vim.notify("[sakuin] Cleaned index at " .. index_dir, vim.log.levels.INFO)
+	else
+		vim.notify("[sakuin] No index found at " .. index_dir, vim.log.levels.WARN)
 	end
 end
 

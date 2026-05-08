@@ -77,6 +77,9 @@ local M = {}
 ---@type ffi.namespace*|nil
 local lib = nil
 
+--- Whether the Rust engine state is initialized (distinct from lib being loaded).
+local initialized = false
+
 ---@return ffi.namespace*
 local function get_lib()
 	if not lib then
@@ -211,22 +214,7 @@ local function on_async_notification()
 	end
 end
 
-function M.load()
-	if lib then
-		return
-	end
-
-	local lib_path = resolve_lib_path()
-	if vim.fn.filereadable(lib_path) == 0 then
-		error(
-			"[sakuin] Native library not found at: "
-				.. lib_path
-				.. "\nRun the build script (scripts/build.sh) or install a prebuilt binary from GitHub Releases."
-		)
-	end
-
-	lib = ffi.load(lib_path)
-
+local function setup_async_handle()
 	local schedule_pending = false
 	async_handle = vim.uv.new_async(function()
 		if not schedule_pending then
@@ -256,9 +244,32 @@ function M.load()
 	lib.sakuin_register_async_notifier(ffi.cast("void*", handle_ptr), ffi.cast("void*", send_fn_ptr))
 end
 
+function M.load()
+	if lib and async_handle then
+		return
+	end
+
+	if not lib then
+		local lib_path = resolve_lib_path()
+		if vim.fn.filereadable(lib_path) == 0 then
+			error(
+				"[sakuin] Native library not found at: "
+					.. lib_path
+					.. "\nRun the build script (scripts/build.sh) or install a prebuilt binary from GitHub Releases."
+			)
+		end
+
+		lib = ffi.load(lib_path)
+	end
+
+	if not async_handle then
+		setup_async_handle()
+	end
+end
+
 ---@return boolean
 function M.is_loaded()
-	return lib ~= nil
+	return lib ~= nil and initialized
 end
 
 ---@param project_root string
@@ -266,16 +277,42 @@ end
 ---@param config_json string
 ---@return number
 function M.init(project_root, index_dir, config_json)
-	return get_lib().sakuin_init(project_root, index_dir, config_json)
+	local rc = get_lib().sakuin_init(project_root, index_dir, config_json)
+	if tonumber(rc) == 0 then
+		initialized = true
+	end
+	return rc
 end
 
 function M.shutdown()
+	initialized = false
 	if lib then
 		lib.sakuin_shutdown()
 	end
 	if async_handle and not async_handle:is_closing() then
 		async_handle:close()
 	end
+	async_handle = nil
+end
+
+--- Reinitialize for a new project root. Shuts down the current state,
+--- recreates the async handle, and calls sakuin_init with the new paths.
+---@param project_root string
+---@param index_dir string
+---@param config_json string
+---@return number
+function M.reinit(project_root, index_dir, config_json)
+	-- Shut down the existing Rust state (watcher, writer, etc.)
+	M.shutdown()
+
+	-- Recreate the async handle for uv notifications
+	setup_async_handle()
+
+	local rc = tonumber(get_lib().sakuin_init(project_root, index_dir, config_json))
+	if rc == 0 then
+		initialized = true
+	end
+	return rc
 end
 
 ---@return number
