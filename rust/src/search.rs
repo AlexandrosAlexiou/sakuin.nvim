@@ -7,11 +7,12 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use tantivy::collector::TopDocs;
 use tantivy::query::EnableScoring;
-use tantivy::query::{AllQuery, BooleanQuery, Occur, RegexQuery};
-use tantivy::schema::{Schema, Value};
-use tantivy::{Executor, IndexReader, TantivyDocument};
+use tantivy::query::{AllQuery, BooleanQuery, Occur, TermQuery};
+use tantivy::schema::{IndexRecordOption, Schema, Value};
+use tantivy::{Executor, IndexReader, TantivyDocument, Term};
 
 use crate::index::{FIELD_BODY, FIELD_FILENAME, FIELD_PATH};
+use crate::tokenizer::query_trigrams;
 use crate::types::SearchResult;
 
 pub struct SearchParams<'a> {
@@ -44,38 +45,31 @@ where
     let filename_field = params.schema.get_field(FIELD_FILENAME).unwrap();
     let fields = [body_field, path_field, filename_field];
 
-    // Tantivy candidate retrieval: chunks must all appear in the document (AND).
-    // Pure-punctuation queries fall back to AllQuery for line-level scanning.
-    let chunks = alphanumeric_chunks(&needle);
-    let tantivy_query: Box<dyn tantivy::query::Query> = if chunks.is_empty() {
+    // Sub-trigram queries fall back to AllQuery; the line-scan verifier still
+    // enforces correctness, just over a larger candidate set.
+    let trigrams = query_trigrams(&needle);
+    let tantivy_query: Box<dyn tantivy::query::Query> = if trigrams.is_empty() {
         Box::new(AllQuery)
     } else {
-        let per_chunk: Vec<(Occur, Box<dyn tantivy::query::Query>)> = chunks
+        let per_trigram: Vec<(Occur, Box<dyn tantivy::query::Query>)> = trigrams
             .iter()
-            .filter_map(|chunk| {
-                let pattern = format!(".*{}.*", regex_escape(chunk));
+            .map(|tg| {
                 let field_qs: Vec<(Occur, Box<dyn tantivy::query::Query>)> = fields
                     .iter()
-                    .filter_map(|&f| {
-                        RegexQuery::from_pattern(&pattern, f).ok().map(|rq| {
-                            (
-                                Occur::Should,
-                                Box::new(rq) as Box<dyn tantivy::query::Query>,
-                            )
-                        })
+                    .map(|&f| {
+                        let term = Term::from_field_text(f, tg);
+                        let q: Box<dyn tantivy::query::Query> =
+                            Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs));
+                        (Occur::Should, q)
                     })
                     .collect();
-                if field_qs.is_empty() {
-                    None
-                } else {
-                    Some((
-                        Occur::Must,
-                        Box::new(BooleanQuery::new(field_qs)) as Box<dyn tantivy::query::Query>,
-                    ))
-                }
+                (
+                    Occur::Must,
+                    Box::new(BooleanQuery::new(field_qs)) as Box<dyn tantivy::query::Query>,
+                )
             })
             .collect();
-        Box::new(BooleanQuery::new(per_chunk))
+        Box::new(BooleanQuery::new(per_trigram))
     };
 
     let searcher = params.reader.searcher();
@@ -231,39 +225,6 @@ fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
     }
     h.windows(n.len())
         .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
-}
-
-/// Split a string into contiguous alphanumeric chunks (for Tantivy index lookups).
-fn alphanumeric_chunks(s: &str) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for c in s.chars() {
-        if c.is_alphanumeric() {
-            current.push(c);
-        } else if !current.is_empty() {
-            chunks.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-/// Escape characters that are special in Tantivy's regex syntax.
-fn regex_escape(literal: &str) -> String {
-    let mut escaped = String::with_capacity(literal.len() + 8);
-    for c in literal.chars() {
-        match c {
-            '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
-            | '<' | '>' => {
-                escaped.push('\\');
-                escaped.push(c);
-            }
-            _ => escaped.push(c),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
