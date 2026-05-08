@@ -36,8 +36,7 @@ local function watch_indexing(ffi_mod, label, on_done)
 				on_done()
 			end
 		else
-			local err = event.error or ffi_mod.last_error() or "unknown error"
-			progress.fail(label, err)
+			progress.fail(label, event.error or "unknown error")
 		end
 	end)
 end
@@ -67,9 +66,9 @@ local function init_engine(config)
 		log_level = config.log_level or "info",
 		log_file = config.log_file,
 	})
-	local rc = ffi_mod.init(root, index_dir, rust_config)
-	if rc ~= 0 then
-		vim.notify("[sakuin] Failed to initialize: " .. (ffi_mod.last_error() or "unknown error"), vim.log.levels.ERROR)
+	local ok, init_err = ffi_mod.init(root, index_dir, rust_config)
+	if not ok then
+		vim.notify("[sakuin] Failed to initialize: " .. (init_err or "unknown error"), vim.log.levels.ERROR)
 		return nil
 	end
 
@@ -96,10 +95,10 @@ local function reinit_engine(config)
 		log_file = config.log_file,
 	})
 
-	local rc = ffi_mod.reinit(root, index_dir, rust_config)
-	if rc ~= 0 then
+	local ok, reinit_err = ffi_mod.reinit(root, index_dir, rust_config)
+	if not ok then
 		vim.notify(
-			"[sakuin] Failed to reinitialize: " .. (ffi_mod.last_error() or "unknown error"),
+			"[sakuin] Failed to reinitialize: " .. (reinit_err or "unknown error"),
 			vim.log.levels.ERROR
 		)
 		return
@@ -107,8 +106,8 @@ local function reinit_engine(config)
 
 	if vim.fn.isdirectory(index_dir) == 1 then
 		if config.update_on_start then
-			local update_rc = ffi_mod.update_index_async()
-			if update_rc == 0 then
+			local update_ok = ffi_mod.update_index_async()
+			if update_ok then
 				watch_indexing(ffi_mod, "Syncing", function()
 					start_watcher_if_enabled(ffi_mod, config)
 				end)
@@ -135,14 +134,14 @@ local function deferred_startup(config)
 	end
 
 	if config.update_on_start then
-		local update_rc = ffi_mod.update_index_async()
-		if update_rc == 0 then
+		local update_ok, update_err = ffi_mod.update_index_async()
+		if update_ok then
 			watch_indexing(ffi_mod, "Syncing", function()
 				start_watcher_if_enabled(ffi_mod, config)
 			end)
 		else
 			vim.notify(
-				"[sakuin] Failed to start async update: " .. (ffi_mod.last_error() or "unknown"),
+				"[sakuin] Failed to start async update: " .. (update_err or "unknown"),
 				vim.log.levels.ERROR
 			)
 			start_watcher_if_enabled(ffi_mod, config)
@@ -229,13 +228,13 @@ function M.async_index(mode)
 	local fn_async = mode == "build" and ffi_mod.build_index_async or ffi_mod.update_index_async
 	local config = require("sakuin.config").get()
 
-	local rc = fn_async()
-	if rc == 0 then
+	local ok, err = fn_async()
+	if ok then
 		watch_indexing(ffi_mod, label, function()
 			start_watcher_if_enabled(ffi_mod, config)
 		end)
 	else
-		vim.notify("[sakuin] Failed to start: " .. (ffi_mod.last_error() or "unknown"), vim.log.levels.ERROR)
+		vim.notify("[sakuin] Failed to start: " .. (err or "unknown"), vim.log.levels.ERROR)
 	end
 end
 

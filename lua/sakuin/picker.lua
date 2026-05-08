@@ -60,8 +60,8 @@ function M.sakuin(opts)
 				ctx.async:resume()
 			end)
 
-			local rc, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
-			if rc ~= 0 then
+			local ok, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
+			if not ok then
 				sakuin_ffi.unregister_search_callback(my_gen)
 				if submit_err then
 					vim.schedule(function()
