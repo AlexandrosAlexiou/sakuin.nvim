@@ -17,71 +17,60 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: libsakuin-x86_64-linux.so
-            lib_name: libsakuin.so
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_name: libsakuin-aarch64-linux.so
-            lib_name: libsakuin.so
-            use_cross: true
-          - os: macos-14
-            target: aarch64-apple-darwin
-            artifact_name: libsakuin-aarch64-darwin.dylib
-            lib_name: libsakuin.dylib
-          - os: macos-14
-            target: x86_64-apple-darwin
-            artifact_name: libsakuin-x86_64-darwin.dylib
-            lib_name: libsakuin.dylib
-          - os: windows-latest
-            target: x86_64-pc-windows-gnu
-            artifact_name: sakuin-x86_64-windows.dll
-            lib_name: sakuin.dll
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact_name: sakuin-aarch64-windows.dll
-            lib_name: sakuin.dll
+          # Linux glibc
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu,    libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-gnu.so,    toolchain: stable,  components: "",         extra_args: "" }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu,   libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-gnu.so,   toolchain: stable,  components: "",         extra_args: "" }
+          # Linux musl
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,   libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-musl.so,   toolchain: stable,  components: "",         extra_args: "" }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl,  libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-musl.so,  toolchain: stable,  components: "",         extra_args: "" }
+          # FreeBSD
+          - { os: ubuntu-latest, target: x86_64-unknown-freebsd,      libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-freebsd.so,      toolchain: stable,  components: "",         extra_args: "" }
+          - { os: ubuntu-latest, target: aarch64-unknown-freebsd,     libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-freebsd.so,     toolchain: stable,  components: "",         extra_args: "" }
+          # OpenBSD (tier 3 — needs nightly + rust-src + -Z build-std)
+          - { os: ubuntu-latest, target: x86_64-unknown-openbsd,      libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-openbsd.so,      toolchain: nightly, components: "rust-src", extra_args: "-Z build-std=std,panic_abort" }
+          - { os: ubuntu-latest, target: aarch64-unknown-openbsd,     libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-openbsd.so,     toolchain: nightly, components: "rust-src", extra_args: "-Z build-std=std,panic_abort" }
+          # Android
+          - { os: ubuntu-latest, target: aarch64-linux-android,       libname: libsakuin.so,    artifact: libsakuin-aarch64-linux-android.so,       toolchain: stable,  components: "",         extra_args: "" }
+          # macOS
+          - { os: macos-14,      target: aarch64-apple-darwin,        libname: libsakuin.dylib, artifact: libsakuin-aarch64-apple-darwin.dylib,     toolchain: stable,  components: "",         extra_args: "" }
+          - { os: macos-14,      target: x86_64-apple-darwin,         libname: libsakuin.dylib, artifact: libsakuin-x86_64-apple-darwin.dylib,      toolchain: stable,  components: "",         extra_args: "" }
+          # Windows MSVC
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,     libname: sakuin.dll,      artifact: sakuin-x86_64-pc-windows-msvc.dll,        toolchain: stable,  components: "",         extra_args: "" }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc,    libname: sakuin.dll,      artifact: sakuin-aarch64-pc-windows-msvc.dll,       toolchain: stable,  components: "",         extra_args: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        uses: houseabsolute/actions-rust-cross@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
+          toolchain: ${{ matrix.toolchain }}
+          components: ${{ matrix.components }}
+          args: "--manifest-path rust/Cargo.toml --release --lib ${{ matrix.extra_args }}"
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-          key: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --manifest-path rust/Cargo.toml --release --target ${{ matrix.target }}
-
-      - name: Build (cargo)
-        if: ${{ !matrix.use_cross }}
-        run: cargo build --manifest-path rust/Cargo.toml --release --target ${{ matrix.target }}
-
-      - name: Rename artifact
+      - name: Stage artifact
         shell: bash
         run: |
-          src="rust/target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
-          cp "$src" "${{ matrix.artifact_name }}"
-
-      - name: Ad-hoc codesign (macOS)
-        if: runner.os == 'macOS'
-        run: codesign --sign - --force "${{ matrix.artifact_name }}"
+          src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
+          dest="${{ matrix.artifact }}"
+          cp "$src" "$dest"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            codesign --sign - --force "$dest"
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dest" > "$dest.sha256"
+          else
+            shasum -a 256 "$dest" > "$dest.sha256"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: ${{ matrix.target }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
 
   release:
     name: Create Release
@@ -91,12 +80,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: List artifacts
-        run: find artifacts -type f
+        run: ls -la artifacts/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**/*
+          files: artifacts/*
