@@ -130,7 +130,11 @@ mod tests {
     #[test]
     fn test_query_trigrams_matches_tokenizer() {
         for input in &["foo", "FooBar", "std::vector", "a b c", "héllo"] {
-            assert_eq!(query_trigrams(input), tokenize(input), "mismatch for {input:?}");
+            assert_eq!(
+                query_trigrams(input),
+                tokenize(input),
+                "mismatch for {input:?}"
+            );
         }
     }
 
