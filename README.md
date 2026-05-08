@@ -99,6 +99,7 @@ require("sakuin").setup({
 | `:Sakuin [query]` | Open the search picker (optionally with initial query) |
 | `:SakuinCword` | Search word under cursor or visual selection |
 | `:SakuinBuild` | Full index rebuild |
+| `:SakuinClean`      | Stop engine and wipe index                                          |
 | `:SakuinUpdate` | Incremental index update |
 | `:SakuinStats` | Show index statistics |
 | `:SakuinLogs [level]` | Open log viewer (optionally set log level, e.g. `:SakuinLogs debug`) |
