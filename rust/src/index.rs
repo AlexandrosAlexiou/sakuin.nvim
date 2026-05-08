@@ -3,10 +3,10 @@ use std::path::Path;
 
 use tantivy::directory::MmapDirectory;
 use tantivy::schema::*;
-use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, TextAnalyzer};
+use tantivy::tokenizer::TextAnalyzer;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
-use crate::tokenizer::{CodeTokenizer, CODE_TOKENIZER_NAME};
+use crate::tokenizer::{TrigramTokenizer, TRIGRAM_TOKENIZER_NAME};
 use crate::types::IndexStats;
 
 pub const FIELD_PATH: &str = "path";
@@ -20,28 +20,27 @@ pub const FIELD_SIZE: &str = "size";
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
 
-    let code_field_indexing = TextFieldIndexing::default()
-        .set_tokenizer(CODE_TOKENIZER_NAME)
-        .set_index_option(IndexRecordOption::WithFreqsAndPositions);
-    let code_text_options = TextOptions::default()
-        .set_indexing_options(code_field_indexing.clone())
+    // WithFreqs (no positions): trigrams are never used in phrase queries.
+    let trigram_indexing = TextFieldIndexing::default()
+        .set_tokenizer(TRIGRAM_TOKENIZER_NAME)
+        .set_index_option(IndexRecordOption::WithFreqs);
+    let trigram_text_stored = TextOptions::default()
+        .set_indexing_options(trigram_indexing.clone())
         .set_stored();
-    builder.add_text_field(FIELD_PATH, code_text_options.clone());
+    let trigram_text = TextOptions::default().set_indexing_options(trigram_indexing);
+
+    builder.add_text_field(FIELD_PATH, trigram_text_stored.clone());
 
     // Exact (untokenized) copy of the path, used for delete-by-path and
     // mtime lookups. STRING = exact match, STORED so we can read it back.
     builder.add_text_field(FIELD_PATH_EXACT, STRING | STORED);
 
-    builder.add_text_field(FIELD_FILENAME, code_text_options);
+    builder.add_text_field(FIELD_FILENAME, trigram_text_stored);
 
     builder.add_text_field(FIELD_EXTENSION, STRING | STORED);
 
-    // Body is not stored (too large); indexed with the default tokenizer for candidate retrieval.
-    let body_indexing = TextFieldIndexing::default()
-        .set_tokenizer("default")
-        .set_index_option(IndexRecordOption::WithFreqsAndPositions);
-    let body_options = TextOptions::default().set_indexing_options(body_indexing);
-    builder.add_text_field(FIELD_BODY, body_options);
+    // Body is not stored (too large).
+    builder.add_text_field(FIELD_BODY, trigram_text);
 
     builder.add_u64_field(FIELD_MODIFIED, STORED | FAST);
 
@@ -51,7 +50,7 @@ pub fn build_schema() -> Schema {
 }
 
 // Bump when schema/tokenizer changes; mismatches trigger a full index wipe+rebuild.
-const SCHEMA_VERSION: &str = "v3";
+const SCHEMA_VERSION: &str = "v4";
 
 pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index_path = index_dir.join("index");
@@ -87,13 +86,10 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index = Index::open_or_create(dir, schema)
         .map_err(|e| format!("Failed to open or create index: {}", e))?;
 
-    let code_analyzer = TextAnalyzer::builder(CodeTokenizer::default())
-        .filter(RemoveLongFilter::limit(100))
-        .filter(LowerCaser)
-        .build();
+    let trigram_analyzer = TextAnalyzer::builder(TrigramTokenizer::default()).build();
     index
         .tokenizers()
-        .register(CODE_TOKENIZER_NAME, code_analyzer);
+        .register(TRIGRAM_TOKENIZER_NAME, trigram_analyzer);
 
     fs::write(&version_marker, SCHEMA_VERSION)
         .map_err(|e| format!("Failed to write schema version marker: {}", e))?;
