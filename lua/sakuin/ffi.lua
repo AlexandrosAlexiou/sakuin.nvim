@@ -42,34 +42,39 @@ ffi.cdef([[
     const char* project_root;
   } SakuinIndexStats;
 
-  int         sakuin_init(const char* project_root, const char* index_dir, const char* config_json);
-  void        sakuin_shutdown(void);
+  // Result of a fallible call. err is null on success, or a heap-allocated
+  // string the caller must free with sakuin_free_string.
+  typedef struct {
+    const char* err;
+  } SakuinStatus;
 
-  int         sakuin_build_index_async(void);
-  int         sakuin_update_index_async(void);
+  SakuinStatus sakuin_init(const char* project_root, const char* index_dir, const char* config_json);
+  void         sakuin_shutdown(void);
 
-  int         sakuin_start_watcher(void);
-  void        sakuin_stop_watcher(void);
+  SakuinStatus sakuin_build_index_async(void);
+  SakuinStatus sakuin_update_index_async(void);
+
+  SakuinStatus sakuin_start_watcher(void);
+  void         sakuin_stop_watcher(void);
 
   void                    sakuin_register_async_notifier(void* handle_ptr, void* send_fn_ptr);
   SakuinSearchMessage*    sakuin_search_take_result(void);
   void                    sakuin_free_search_message(SakuinSearchMessage* ptr);
-  int                     sakuin_search_submit(const char* query, uint64_t generation, uint64_t limit);
+  SakuinStatus            sakuin_search_submit(const char* query, uint64_t generation, uint64_t limit);
   void                    sakuin_search_cancel(void);
 
   SakuinIndexingEvent*    sakuin_indexing_take_event(void);
   void                    sakuin_free_indexing_event(SakuinIndexingEvent* ptr);
 
-  SakuinIndexStats*       sakuin_stats(void);
+  SakuinStatus            sakuin_stats(SakuinIndexStats** out);
   void                    sakuin_free_stats(SakuinIndexStats* ptr);
-  const char*             sakuin_last_error(void);
 
-  void        sakuin_free_string(const char* s);
+  void         sakuin_free_string(const char* s);
 
-  int         sakuin_set_log_level(const char* level);
-  void        sakuin_clear_logs(void);
+  SakuinStatus sakuin_set_log_level(const char* level);
+  void         sakuin_clear_logs(void);
 
-  int         uv_async_send(void* handle);
+  int          uv_async_send(void* handle);
 ]])
 
 local M = {}
@@ -117,6 +122,17 @@ local function safe_str(p)
 		return ""
 	end
 	return ffi.string(p)
+end
+
+-- Drain a SakuinStatus: returns nil on success, or the error message on
+-- failure. Frees the heap-allocated error string on the way out.
+local function status_to_err(status)
+	if status.err == nil then
+		return nil
+	end
+	local msg = ffi.string(status.err)
+	lib.sakuin_free_string(status.err)
+	return msg
 end
 
 --- Convert a CSearchMessage pointer to Lua-friendly data and free it.
@@ -275,13 +291,15 @@ end
 ---@param project_root string
 ---@param index_dir string
 ---@param config_json string
----@return number
+---@return boolean ok
+---@return string|nil err
 function M.init(project_root, index_dir, config_json)
-	local rc = get_lib().sakuin_init(project_root, index_dir, config_json)
-	if tonumber(rc) == 0 then
-		initialized = true
+	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))
+	if err then
+		return false, err
 	end
-	return rc
+	initialized = true
+	return true, nil
 end
 
 function M.shutdown()
@@ -300,7 +318,8 @@ end
 ---@param project_root string
 ---@param index_dir string
 ---@param config_json string
----@return number
+---@return boolean ok
+---@return string|nil err
 function M.reinit(project_root, index_dir, config_json)
 	-- Shut down the existing Rust state (watcher, writer, etc.)
 	M.shutdown()
@@ -308,16 +327,19 @@ function M.reinit(project_root, index_dir, config_json)
 	-- Recreate the async handle for uv notifications
 	setup_async_handle()
 
-	local rc = tonumber(get_lib().sakuin_init(project_root, index_dir, config_json))
-	if rc == 0 then
-		initialized = true
+	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))
+	if err then
+		return false, err
 	end
-	return rc
+	initialized = true
+	return true, nil
 end
 
----@return number
+---@return boolean ok
+---@return string|nil err
 function M.start_watcher()
-	return get_lib().sakuin_start_watcher()
+	local err = status_to_err(get_lib().sakuin_start_watcher())
+	return err == nil, err
 end
 
 function M.stop_watcher()
@@ -359,14 +381,11 @@ end
 ---@param query string
 ---@param generation number
 ---@param limit? number 0 or nil = unlimited
----@return number rc 0 on success, -1 on error
----@return string|nil error
+---@return boolean ok
+---@return string|nil err
 function M.search_submit(query, generation, limit)
-	local rc = get_lib().sakuin_search_submit(query, generation, limit or 0)
-	if tonumber(rc) ~= 0 then
-		return -1, M.last_error() or "search_submit failed"
-	end
-	return 0, nil
+	local err = status_to_err(get_lib().sakuin_search_submit(query, generation, limit or 0))
+	return err == nil, err
 end
 
 function M.search_cancel()
@@ -374,12 +393,18 @@ function M.search_cancel()
 end
 
 ---@return table|nil stats
----@return string|nil error
+---@return string|nil err
 function M.stats()
 	local l = get_lib()
-	local raw = l.sakuin_stats()
+	local out = ffi.new("SakuinIndexStats*[1]")
+	local err = status_to_err(l.sakuin_stats(out))
+	if err then
+		return nil, err
+	end
+
+	local raw = out[0]
 	if raw == nil then
-		return nil, M.last_error() or "stats returned null"
+		return nil, "stats returned null"
 	end
 
 	local stats = {
@@ -393,34 +418,26 @@ function M.stats()
 	return stats, nil
 end
 
----@return number
+---@return boolean ok
+---@return string|nil err
 function M.build_index_async()
-	return get_lib().sakuin_build_index_async()
+	local err = status_to_err(get_lib().sakuin_build_index_async())
+	return err == nil, err
 end
 
----@return number
+---@return boolean ok
+---@return string|nil err
 function M.update_index_async()
-	return get_lib().sakuin_update_index_async()
-end
-
----@return string|nil
-function M.last_error()
-	local l = get_lib()
-	local raw = l.sakuin_last_error()
-	if raw == nil then
-		return nil
-	end
-
-	local msg = ffi.string(raw)
-	l.sakuin_free_string(raw)
-	return msg
+	local err = status_to_err(get_lib().sakuin_update_index_async())
+	return err == nil, err
 end
 
 ---@param level "error"|"warn"|"info"|"debug"|"trace"|"off"
----@return boolean
+---@return boolean ok
+---@return string|nil err
 function M.set_log_level(level)
-	local rc = get_lib().sakuin_set_log_level(level)
-	return tonumber(rc) == 0
+	local err = status_to_err(get_lib().sakuin_set_log_level(level))
+	return err == nil, err
 end
 
 function M.clear_logs()

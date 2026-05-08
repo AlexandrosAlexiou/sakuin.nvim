@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs;
 use std::sync::{Condvar, Mutex, OnceLock};
 use tempfile::TempDir;
@@ -90,8 +90,9 @@ fn init_only(project: &TempDir) {
     let index_dir = root.join(".sakuin");
     let c_root = CString::new(root.to_str().unwrap()).unwrap();
     let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
-    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
-    assert_eq!(rc, 0, "sakuin_init should succeed");
+    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null())
+        .into_result()
+        .expect("sakuin_init should succeed");
 }
 
 fn init_and_build(project: &TempDir) {
@@ -101,8 +102,9 @@ fn init_and_build(project: &TempDir) {
     let c_root = CString::new(root.to_str().unwrap()).unwrap();
     let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
 
-    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
-    assert_eq!(rc, 0, "sakuin_init should succeed");
+    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null())
+        .into_result()
+        .expect("sakuin_init should succeed");
 
     sakuin::internal::build_index().expect("build_index should succeed");
 }
@@ -133,8 +135,11 @@ fn test_init_and_shutdown() {
     init_and_build(&project);
 
     // Stats
-    let stats_ptr = sakuin::sakuin_stats();
-    assert!(!stats_ptr.is_null(), "sakuin_stats should return non-null");
+    let mut stats_ptr: *mut sakuin::ffi::CIndexStats = std::ptr::null_mut();
+    sakuin::sakuin_stats(&mut stats_ptr)
+        .into_result()
+        .expect("sakuin_stats should succeed");
+    assert!(!stats_ptr.is_null(), "stats out-pointer should be set");
     let num_docs = unsafe { (*stats_ptr).num_docs };
     sakuin::sakuin_free_stats(stats_ptr);
 
@@ -230,8 +235,9 @@ fn test_async_search_with_result_slot() {
 
     // Submit a search with generation 42, limit=0 (unlimited)
     let query = CString::new("hello").unwrap();
-    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 42, 0);
-    assert_eq!(rc, 0, "sakuin_search_submit should succeed");
+    sakuin::sakuin_search_submit(query.as_ptr(), 42, 0)
+        .into_result()
+        .expect("sakuin_search_submit should succeed");
 
     // Wait for the worker to notify us (may get batch + done messages)
     let notified = wait_for_notification(std::time::Duration::from_secs(5));
@@ -764,8 +770,9 @@ fn test_init_with_config_json() {
     let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
     let c_cfg = CString::new(config_json).unwrap();
 
-    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr());
-    assert_eq!(rc, 0, "sakuin_init with valid config JSON should succeed");
+    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr())
+        .into_result()
+        .expect("sakuin_init with valid config JSON should succeed");
 
     sakuin::internal::build_index().expect("build_index should succeed");
 
@@ -789,21 +796,14 @@ fn test_init_with_invalid_config_json() {
     let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
     let c_cfg = CString::new("{not_valid_json}").unwrap();
 
-    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr());
-    assert_eq!(rc, -1, "sakuin_init with invalid config JSON should fail");
-
-    let err_ptr = sakuin::sakuin_last_error();
-    assert!(
-        !err_ptr.is_null(),
-        "last_error should be set after failed init"
-    );
-    let err = unsafe { CStr::from_ptr(err_ptr) }.to_str().unwrap();
+    let err = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), c_cfg.as_ptr())
+        .into_result()
+        .expect_err("sakuin_init with invalid config JSON should fail");
     assert!(
         err.contains("Failed to parse config JSON"),
         "Unexpected error: {}",
         err
     );
-    sakuin::sakuin_free_string(err_ptr);
 }
 
 // ============================================================================
@@ -864,8 +864,9 @@ fn test_async_build_index() {
 
     reset_notify_state();
 
-    let rc = sakuin::sakuin_build_index_async();
-    assert_eq!(rc, 0, "sakuin_build_index_async should succeed");
+    sakuin::sakuin_build_index_async()
+        .into_result()
+        .expect("sakuin_build_index_async should succeed");
 
     let (_total, done) = wait_for_indexing_done(std::time::Duration::from_secs(10));
     assert!(
@@ -904,8 +905,9 @@ fn test_async_update_index() {
 
     reset_notify_state();
 
-    let rc = sakuin::sakuin_update_index_async();
-    assert_eq!(rc, 0, "sakuin_update_index_async should succeed");
+    sakuin::sakuin_update_index_async()
+        .into_result()
+        .expect("sakuin_update_index_async should succeed");
 
     let _event = wait_for_indexing_done(std::time::Duration::from_secs(10));
 
@@ -929,8 +931,9 @@ fn test_start_stop_watcher() {
     let project = create_test_project();
     init_and_build(&project);
 
-    let rc = sakuin::sakuin_start_watcher();
-    assert_eq!(rc, 0, "sakuin_start_watcher should succeed");
+    sakuin::sakuin_start_watcher()
+        .into_result()
+        .expect("sakuin_start_watcher should succeed");
 
     sakuin::sakuin_stop_watcher(); // should not crash
 
@@ -943,19 +946,17 @@ fn test_watcher_double_start() {
     let project = create_test_project();
     init_and_build(&project);
 
-    let rc = sakuin::sakuin_start_watcher();
-    assert_eq!(rc, 0, "first sakuin_start_watcher should succeed");
+    sakuin::sakuin_start_watcher()
+        .into_result()
+        .expect("first sakuin_start_watcher should succeed");
 
-    let rc = sakuin::sakuin_start_watcher();
-    assert_eq!(rc, -1, "second sakuin_start_watcher should fail with -1");
-
-    // Error should be available.
-    let err_ptr = sakuin::sakuin_last_error();
+    let err = sakuin::sakuin_start_watcher()
+        .into_result()
+        .expect_err("second sakuin_start_watcher should fail");
     assert!(
-        !err_ptr.is_null(),
-        "last_error should describe the double-start failure"
+        !err.is_empty(),
+        "double-start error message should not be empty"
     );
-    sakuin::sakuin_free_string(err_ptr);
 
     sakuin::sakuin_shutdown();
 }
@@ -980,8 +981,9 @@ fn test_search_cancel() {
 
     // Submit and immediately cancel.
     let query = CString::new("ThreadPool").unwrap();
-    let rc = sakuin::sakuin_search_submit(query.as_ptr(), 99, 0);
-    assert_eq!(rc, 0);
+    sakuin::sakuin_search_submit(query.as_ptr(), 99, 0)
+        .into_result()
+        .expect("sakuin_search_submit should succeed");
     sakuin::sakuin_search_cancel();
 
     // Give the worker time to process the cancellation.
@@ -1059,8 +1061,9 @@ fn init_and_build_git(project: &TempDir) {
     let c_root = CString::new(root.to_str().unwrap()).unwrap();
     let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
 
-    let rc = sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null());
-    assert_eq!(rc, 0, "sakuin_init should succeed");
+    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null())
+        .into_result()
+        .expect("sakuin_init should succeed");
 
     sakuin::internal::build_index().expect("build_index should succeed");
 }

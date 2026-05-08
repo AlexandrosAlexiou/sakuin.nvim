@@ -1,22 +1,5 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::OnceLock;
-
-use parking_lot::Mutex;
-
-fn last_error() -> &'static Mutex<Option<String>> {
-    static LAST_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    LAST_ERROR.get_or_init(|| Mutex::new(None))
-}
-
-pub fn set_last_error(msg: String) {
-    log::error!("{}", msg);
-    *last_error().lock() = Some(msg);
-}
-
-pub fn take_last_error() -> Option<String> {
-    last_error().lock().take()
-}
 
 /// # Safety
 /// The pointer must be a valid, non-null, null-terminated C string.
@@ -48,21 +31,53 @@ pub unsafe fn free_c_string(ptr: *const c_char) {
     }
 }
 
-/// Returns 0 on success, -1 on error (error message stored in LAST_ERROR).
-pub fn ffi_try<F>(f: F) -> i32
+/// Result of a fallible FFI call. `err` is null on success, or a heap-allocated
+/// C string on failure. The caller frees the error with `sakuin_free_string`.
+#[repr(C)]
+pub struct CStatus {
+    pub err: *const c_char,
+}
+
+impl CStatus {
+    pub fn ok() -> Self {
+        Self {
+            err: std::ptr::null(),
+        }
+    }
+
+    pub fn err(msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        log::error!("{}", msg);
+        Self {
+            err: str_to_c(&msg),
+        }
+    }
+
+    /// Consume the status, freeing the error string if present. Useful for
+    /// Rust callers (tests, the CLI) that want a normal `Result`.
+    pub fn into_result(self) -> Result<(), String> {
+        if self.err.is_null() {
+            Ok(())
+        } else {
+            let msg = unsafe { CStr::from_ptr(self.err) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { free_c_string(self.err) };
+            Err(msg)
+        }
+    }
+}
+
+/// Run a fallible closure and translate the result into a `CStatus`. Catches
+/// panics so they cross the FFI boundary as errors instead of UB.
+pub fn ffi_try<F>(f: F) -> CStatus
 where
     F: FnOnce() -> Result<(), String> + std::panic::UnwindSafe,
 {
     match std::panic::catch_unwind(f) {
-        Ok(Ok(())) => 0,
-        Ok(Err(e)) => {
-            set_last_error(e);
-            -1
-        }
-        Err(_) => {
-            set_last_error("Rust panic caught at FFI boundary".into());
-            -1
-        }
+        Ok(Ok(())) => CStatus::ok(),
+        Ok(Err(e)) => CStatus::err(e),
+        Err(_) => CStatus::err("Rust panic caught at FFI boundary"),
     }
 }
 

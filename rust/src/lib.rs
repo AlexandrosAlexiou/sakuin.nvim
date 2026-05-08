@@ -22,13 +22,14 @@ mod ffi_exports {
     /// - `index_dir`: absolute path to the index directory (e.g., `{project_root}/.sakuin`)
     /// - `config_json`: JSON-serialized `SakuinConfig` (may be NULL — uses defaults)
     ///
-    /// Returns 0 on success, -1 on error (retrieve message with `sakuin_last_error`).
+    /// On error, the returned `CStatus.err` is a heap-allocated message that the
+    /// caller frees with `sakuin_free_string`.
     #[no_mangle]
     pub extern "C" fn sakuin_init(
         project_root: *const c_char,
         index_dir: *const c_char,
         config_json: *const c_char,
-    ) -> i32 {
+    ) -> ffi::CStatus {
         ffi::ffi_try(|| {
             let root = unsafe { ffi::cstr_to_str(project_root)? };
             let idx_dir = unsafe { ffi::cstr_to_str(index_dir)? };
@@ -50,10 +51,11 @@ mod ffi_exports {
     /// Spawn a full index rebuild on a background thread.
     ///
     /// Returns immediately. Completion/error is pushed via `uv_async_send` →
-    /// `sakuin_indexing_take_event`. Returns 0 if the background job was
-    /// spawned, -1 on error.
+    /// `sakuin_indexing_take_event`. The returned `CStatus` only reports
+    /// whether the background job was successfully spawned; runtime failures
+    /// arrive as an error event on the indexing channel.
     #[no_mangle]
-    pub extern "C" fn sakuin_build_index_async() -> i32 {
+    pub extern "C" fn sakuin_build_index_async() -> ffi::CStatus {
         ffi::ffi_try(|| {
             std::thread::spawn(|| {
                 let prog = state::progress();
@@ -70,7 +72,6 @@ mod ffi_exports {
                     Err(e) => {
                         prog.status
                             .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
-                        ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
                             status: "error",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
@@ -86,7 +87,7 @@ mod ffi_exports {
     }
 
     #[no_mangle]
-    pub extern "C" fn sakuin_update_index_async() -> i32 {
+    pub extern "C" fn sakuin_update_index_async() -> ffi::CStatus {
         ffi::ffi_try(|| {
             std::thread::spawn(|| {
                 let prog = state::progress();
@@ -103,7 +104,6 @@ mod ffi_exports {
                     Err(e) => {
                         prog.status
                             .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
-                        ffi::set_last_error(e.clone());
                         state::push_indexing_event(state::IndexingEvent {
                             status: "error",
                             total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
@@ -141,10 +141,8 @@ mod ffi_exports {
     }
 
     /// Start the background filesystem watcher.
-    ///
-    /// Returns 0 on success, -1 on error.
     #[no_mangle]
-    pub extern "C" fn sakuin_start_watcher() -> i32 {
+    pub extern "C" fn sakuin_start_watcher() -> ffi::CStatus {
         ffi::ffi_try(state::start_watcher)
     }
 
@@ -213,13 +211,12 @@ mod ffi_exports {
     /// - `limit`: maximum total results (0 = unlimited)
     ///
     /// Any in-flight search is automatically cancelled.
-    /// Returns 0 on success, -1 on error.
     #[no_mangle]
     pub extern "C" fn sakuin_search_submit(
         query: *const c_char,
         generation: u64,
         limit: u64,
-    ) -> i32 {
+    ) -> ffi::CStatus {
         ffi::ffi_try(|| {
             let query_str = unsafe { ffi::cstr_to_str(query)? };
             let lim = if limit == 0 {
@@ -239,15 +236,33 @@ mod ffi_exports {
 
     /// Get index statistics as a C struct.
     ///
-    /// Returns NULL on error. Caller MUST free with `sakuin_free_stats`.
+    /// On success, writes the heap-allocated stats pointer to `*out` (caller
+    /// frees with `sakuin_free_stats`) and returns an OK `CStatus`. On error,
+    /// `*out` is set to NULL and the returned status carries the message.
     #[no_mangle]
-    pub extern "C" fn sakuin_stats() -> *mut ffi::CIndexStats {
-        match state::stats() {
-            Ok(stats) => Box::into_raw(Box::new(ffi::CIndexStats::from_internal(stats))),
-            Err(e) => {
-                ffi::set_last_error(e);
-                std::ptr::null_mut()
+    pub extern "C" fn sakuin_stats(out: *mut *mut ffi::CIndexStats) -> ffi::CStatus {
+        if !out.is_null() {
+            unsafe {
+                *out = std::ptr::null_mut();
             }
+        }
+        match state::stats() {
+            Ok(stats) => {
+                let ptr = Box::into_raw(Box::new(ffi::CIndexStats::from_internal(stats)));
+                if out.is_null() {
+                    // Caller didn't provide a slot; drop the allocation rather than leak.
+                    unsafe {
+                        let s = Box::from_raw(ptr);
+                        ffi::free_c_string(s.project_root);
+                    }
+                } else {
+                    unsafe {
+                        *out = ptr;
+                    }
+                }
+                ffi::CStatus::ok()
+            }
+            Err(e) => ffi::CStatus::err(e),
         }
     }
 
@@ -260,18 +275,6 @@ mod ffi_exports {
         unsafe {
             let stats = Box::from_raw(ptr);
             ffi::free_c_string(stats.project_root);
-        }
-    }
-
-    /// Get the last error message.
-    ///
-    /// Returns NULL if no error has occurred since the last call.
-    /// Caller MUST free with `sakuin_free_string`.
-    #[no_mangle]
-    pub extern "C" fn sakuin_last_error() -> *const c_char {
-        match ffi::take_last_error() {
-            Some(msg) => ffi::str_to_c(&msg),
-            None => std::ptr::null(),
         }
     }
 
@@ -288,9 +291,8 @@ mod ffi_exports {
     /// Change the log level at runtime.
     ///
     /// `level`: one of "error", "warn", "info", "debug", "trace", "off".
-    /// Returns 0 on success, -1 if the level string is unrecognized.
     #[no_mangle]
-    pub extern "C" fn sakuin_set_log_level(level: *const c_char) -> i32 {
+    pub extern "C" fn sakuin_set_log_level(level: *const c_char) -> ffi::CStatus {
         ffi::ffi_try(|| {
             let level_str = unsafe { ffi::cstr_to_str(level)? };
             let filter = logging::parse_level(level_str)
