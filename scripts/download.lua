@@ -141,6 +141,125 @@ function M.plugin_root()
 	return vim.fn.fnamemodify(source, ":h:h")
 end
 
+---@param url string
+---@param dest string
+---@return boolean ok
+---@return string? error
+local function curl_download(url, dest)
+	local args = {
+		"curl",
+		"--fail",
+		"--location",
+		"--silent",
+		"--show-error",
+		"--create-dirs",
+		"--output",
+		dest,
+		url,
+	}
+	local result = vim.system(args, { text = true }):wait()
+	if result.code ~= 0 then
+		local stderr = (result.stderr or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if stderr == "" then
+			stderr = "curl exited with code " .. tostring(result.code)
+		end
+		return false, stderr
+	end
+	return true, nil
+end
+
+---@param triple string
+---@param path string
+---@return string[]
+local function sha256_cmd(triple, path)
+	if triple:find("apple%-darwin") then
+		return { "shasum", "-a", "256", path }
+	end
+	if triple:find("windows") then
+		return { "certutil", "-hashfile", path, "SHA256" }
+	end
+	if triple:find("openbsd") then
+		return { "sha256", path }
+	end
+	-- linux (incl. android), freebsd
+	return { "sha256sum", path }
+end
+
+---@param triple string
+---@param stdout string
+---@return string?
+local function parse_sha256_stdout(triple, stdout)
+	if triple:find("windows") then
+		-- certutil prints a header line, then hex (occasionally space-separated bytes), then a footer.
+		for line in stdout:gmatch("[^\r\n]+") do
+			local hex = line:gsub("%s", ""):lower()
+			if hex:match("^%x+$") and #hex == 64 then
+				return hex
+			end
+		end
+		return nil
+	end
+	if triple:find("openbsd") then
+		-- "SHA256 (file) = <hex>"
+		local hex = stdout:match("=%s*(%x+)")
+		return hex and hex:lower() or nil
+	end
+	-- "<hex>  <filename>"
+	local hex = stdout:match("^(%x+)")
+	return hex and hex:lower() or nil
+end
+
+---@param sidecar_path string
+---@return string? hex
+---@return string? error
+local function read_expected_sha(sidecar_path)
+	local f = io.open(sidecar_path, "r")
+	if not f then
+		return nil, "could not open sidecar " .. sidecar_path
+	end
+	local content = f:read("*a") or ""
+	f:close()
+	local hex = content:match("(%x+)")
+	if not hex or #hex ~= 64 then
+		return nil, "sidecar empty or malformed: " .. sidecar_path
+	end
+	return hex:lower(), nil
+end
+
+---@param triple string
+---@param binary_path string
+---@param sidecar_path string
+---@return boolean ok
+---@return string? error
+local function verify_checksum(triple, binary_path, sidecar_path)
+	local expected, read_err = read_expected_sha(sidecar_path)
+	if not expected then
+		return false, read_err
+	end
+
+	local cmd = sha256_cmd(triple, binary_path)
+	if vim.fn.executable(cmd[1]) == 0 then
+		print("[sakuin] " .. cmd[1] .. " not found; skipping checksum verification")
+		return true, nil
+	end
+
+	local result = vim.system(cmd, { text = true }):wait()
+	if result.code ~= 0 then
+		local stderr = (result.stderr or ""):gsub("%s+$", "")
+		return false, "hash command failed: " .. (stderr ~= "" and stderr or ("exit " .. result.code))
+	end
+
+	local actual = parse_sha256_stdout(triple, result.stdout or "")
+	if not actual then
+		return false, "could not parse hash from `" .. cmd[1] .. "` output"
+	end
+
+	if expected ~= actual then
+		return false, string.format("expected %s, got %s", expected, actual)
+	end
+	return true, nil
+end
+
 ---@param version? string Tag name (e.g. "v0.1.0"). nil = latest.
 ---@return boolean success
 ---@return string? error
@@ -155,34 +274,56 @@ function M.download(version)
 	local root = M.plugin_root()
 	local build_dir = root .. "/build"
 	local dest = build_dir .. "/" .. local_name
+	local dest_tmp = dest .. ".tmp"
+	local sidecar = dest .. ".sha256"
 
 	vim.fn.mkdir(build_dir, "p")
 
-	local url
+	local base
 	if version then
-		url = string.format("https://github.com/%s/releases/download/%s/%s", M.repo, version, artifact)
+		base = string.format("https://github.com/%s/releases/download/%s", M.repo, version)
 	else
-		url = string.format("https://github.com/%s/releases/latest/download/%s", M.repo, artifact)
+		base = string.format("https://github.com/%s/releases/latest/download", M.repo)
 	end
+	local lib_url = base .. "/" .. artifact
+	local sha_url = lib_url .. ".sha256"
 
 	print("[sakuin] Downloading " .. artifact .. " ...")
-	local cmd = string.format("curl -fSL --create-dirs -o %s %s", vim.fn.shellescape(dest), vim.fn.shellescape(url))
-
-	local result = os.execute(cmd)
-	local ok = (result == 0 or result == true)
-
+	local ok, err = curl_download(lib_url, dest_tmp)
 	if not ok then
-		return false, "Download failed. URL: " .. url
+		os.remove(dest_tmp)
+		return false, "download failed (" .. lib_url .. "): " .. (err or "unknown")
+	end
+
+	ok, err = curl_download(sha_url, sidecar)
+	if not ok then
+		os.remove(dest_tmp)
+		os.remove(sidecar)
+		return false, "sidecar download failed (" .. sha_url .. "): " .. (err or "unknown")
+	end
+
+	local v_ok, v_err = verify_checksum(triple, dest_tmp, sidecar)
+	if not v_ok then
+		os.remove(dest_tmp)
+		os.remove(sidecar)
+		return false, "checksum verification failed: " .. (v_err or "unknown")
+	end
+
+	local uv = vim.uv or vim.loop
+	local rn_ok, rn_err = uv.fs_rename(dest_tmp, dest)
+	if not rn_ok then
+		os.remove(dest_tmp)
+		return false, "rename failed: " .. tostring(rn_err or "unknown")
 	end
 
 	if not triple:find("windows") then
-		os.execute("chmod +x " .. vim.fn.shellescape(dest))
+		vim.system({ "chmod", "+x", dest }):wait()
 	end
 	if triple:find("apple%-darwin") then
-		os.execute("xattr -d com.apple.quarantine " .. vim.fn.shellescape(dest) .. " 2>/dev/null")
+		vim.system({ "xattr", "-d", "com.apple.quarantine", dest }, { text = true }):wait()
 	end
 
-	print("[sakuin] Downloaded to " .. dest)
+	print("[sakuin] Verified and installed " .. local_name)
 	return true, nil
 end
 
