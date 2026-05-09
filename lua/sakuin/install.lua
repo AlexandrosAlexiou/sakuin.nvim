@@ -24,104 +24,171 @@ function M.has_binary()
 	return vim.fn.filereadable(path) == 1
 end
 
----@param version? string Tag name (e.g. "v0.1.0"), nil for latest
----@return boolean success
----@return string? error
-local function try_download(version)
+---@param version? string
+---@param on_done fun(ok: boolean, err?: string)
+local function try_download_async(version, on_done)
 	local root = plugin_root()
 	local download_script = root .. "/scripts/download.lua"
 
 	if vim.fn.filereadable(download_script) == 0 then
-		return false, "download script not found at " .. download_script
+		on_done(false, "download script not found at " .. download_script)
+		return
 	end
 
 	local download = dofile(download_script)
-	return download.download(version)
+	download.download(version, on_done)
 end
 
----@return boolean success
----@return string? error
-local function try_cargo_build()
+local build_in_progress = false
+---@type fun(ok: boolean)[]
+local build_pending = {}
+
+local download_in_progress = false
+---@type fun(ok: boolean)[]
+local download_pending = {}
+
+---@return boolean
+function M.is_installing()
+	return download_in_progress or build_in_progress
+end
+
+---@param on_done fun(ok: boolean, err?: string)
+local function build_async(on_done)
 	local root = plugin_root()
 	local build_script = root .. "/scripts/build.sh"
 
 	if vim.fn.executable("cargo") == 0 then
-		return false, "cargo not found in PATH"
+		on_done(false, "cargo not found in PATH")
+		return
 	end
 
-	if vim.fn.filereadable(build_script) == 1 then
-		print("[sakuin] Building from source with scripts/build.sh ...")
-		local result = os.execute("bash " .. vim.fn.shellescape(build_script))
-		local ok = (result == 0 or result == true)
-		if ok then
-			return true, nil
-		else
-			return false, "build.sh failed"
+	local log_path = root .. "/build/build.log"
+	vim.fn.mkdir(root .. "/build", "p")
+	local log = io.open(log_path, "w")
+	local function on_chunk(_, data)
+		if log and data then
+			log:write(data)
 		end
 	end
 
-	-- Fallback: direct cargo build
-	print("[sakuin] Building from source with cargo ...")
-	local rust_dir = root .. "/rust"
-	local cmd = string.format("cargo build --manifest-path %s/Cargo.toml --release", vim.fn.shellescape(rust_dir))
-
-	local result = os.execute(cmd)
-	local ok = (result == 0 or result == true)
-	if not ok then
-		return false, "cargo build failed"
+	local cmd
+	local needs_copy = false
+	if vim.fn.filereadable(build_script) == 1 then
+		cmd = { "bash", build_script, "lib" }
+	else
+		local rust_dir = root .. "/rust"
+		cmd = { "cargo", "build", "--manifest-path", rust_dir .. "/Cargo.toml", "--release", "--lib" }
+		needs_copy = true
 	end
 
-	local _, lib_name = lib_path()
-	local build_dir = root .. "/build"
-	vim.fn.mkdir(build_dir, "p")
+	vim.system(
+		cmd,
+		{
+			text = true,
+			stdout = on_chunk,
+			stderr = on_chunk,
+		},
+		vim.schedule_wrap(function(result)
+			if log then
+				log:close()
+			end
 
-	local src = rust_dir .. "/target/release/" .. lib_name
-	local dest = build_dir .. "/" .. lib_name
-	local copy_ok = vim.loop.fs_copyfile(src, dest)
-	if not copy_ok then
-		return false, "failed to copy " .. src .. " to " .. dest
-	end
+			if result.code ~= 0 then
+				on_done(false, "build failed (log: " .. log_path .. ")")
+				return
+			end
 
-	return true, nil
+			if needs_copy then
+				local _, lib_name = lib_path()
+				local rust_dir = root .. "/rust"
+				local src = rust_dir .. "/target/release/" .. lib_name
+				local dest = root .. "/build/" .. lib_name
+				local copy_ok = (vim.uv or vim.loop).fs_copyfile(src, dest)
+				if not copy_ok then
+					on_done(false, "failed to copy " .. src .. " to " .. dest)
+					return
+				end
+			end
+
+			on_done(true)
+		end)
+	)
 end
 
--- Tries: 1) check if it exists, 2) download prebuilt, 3) build from source.
--- Used as the lazy.nvim build hook.
+---@param on_ready fun(ok: boolean)
+local function start_or_join_build(on_ready)
+	if build_in_progress then
+		build_pending[#build_pending + 1] = on_ready
+		return
+	end
+	build_in_progress = true
+
+	vim.notify("Building from source (this may take a few minutes)…", vim.log.levels.INFO, { title = "sakuin" })
+
+	build_async(function(ok, err)
+		build_in_progress = false
+		if ok then
+			vim.notify("Built from source successfully.", vim.log.levels.INFO, { title = "sakuin" })
+		else
+			vim.notify("Build from source failed: " .. (err or "unknown"), vim.log.levels.ERROR, { title = "sakuin" })
+		end
+		local waiters = build_pending
+		build_pending = {}
+		on_ready(ok)
+		for _, cb in ipairs(waiters) do
+			cb(ok)
+		end
+	end)
+end
+
 ---@param opts? { version?: string }
-function M.ensure_binary(opts)
+---@param on_ready? fun(ok: boolean)
+function M.ensure_binary(opts, on_ready)
 	opts = opts or {}
+	on_ready = on_ready or function() end
 
 	if M.has_binary() then
-		print("[sakuin] Native library already present.")
+		on_ready(true)
 		return
 	end
 
-	print("[sakuin] Native library not found. Attempting download ...")
-	local dl_ok, dl_err = try_download(opts.version)
-	if dl_ok then
-		print("[sakuin] Prebuilt binary installed successfully.")
+	if build_in_progress then
+		build_pending[#build_pending + 1] = on_ready
 		return
 	end
 
-	print("[sakuin] Download failed: " .. (dl_err or "unknown error"))
-	print("[sakuin] Falling back to building from source ...")
-
-	local build_ok, build_err = try_cargo_build()
-	if build_ok then
-		print("[sakuin] Built from source successfully.")
+	if download_in_progress then
+		download_pending[#download_pending + 1] = on_ready
 		return
 	end
 
-	local msg = string.format(
-		"[sakuin] Failed to obtain native library.\n"
-			.. "  Download error: %s\n"
-			.. "  Build error: %s\n"
-		.. "  Install Rust (https://rustup.rs) and run scripts/build.sh, "
-		.. "or download a binary from GitHub Releases.",
-		dl_err or "unknown",
-		build_err or "unknown"
-	)
-	vim.notify(msg, vim.log.levels.ERROR)
+	download_in_progress = true
+	vim.notify("Downloading prebuilt binary…", vim.log.levels.INFO, { title = "sakuin" })
+
+	try_download_async(opts.version, vim.schedule_wrap(function(dl_ok, dl_err)
+		download_in_progress = false
+		local waiters = download_pending
+		download_pending = {}
+
+		if dl_ok then
+			vim.notify("Prebuilt binary installed.", vim.log.levels.INFO, { title = "sakuin" })
+			on_ready(true)
+			for _, cb in ipairs(waiters) do
+				cb(true)
+			end
+			return
+		end
+
+		vim.notify("Prebuilt download failed: " .. (dl_err or "unknown"), vim.log.levels.WARN, { title = "sakuin" })
+
+		-- Give snacks one scheduler tick to render the WARN before the next notify.
+		vim.schedule(function()
+			start_or_join_build(on_ready)
+			for _, cb in ipairs(waiters) do
+				start_or_join_build(cb)
+			end
+		end)
+	end))
 end
 
 return M

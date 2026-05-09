@@ -21,6 +21,10 @@ local function search_preflight()
     vim.notify("[sakuin] Indexing is in progress, please wait…", vim.log.levels.WARN)
     return false
   end
+  if require("sakuin.install").is_installing() then
+    vim.notify("[sakuin] Native library is being built, please wait…", vim.log.levels.WARN)
+    return false
+  end
   if not require("sakuin.ffi").is_loaded() then
     vim.notify("[sakuin] No index found. Run :SakuinBuild first.", vim.log.levels.WARN)
     return false
