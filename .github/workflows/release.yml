@@ -69,12 +69,6 @@ jobs:
         shell: bash
         run: |
           src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
-          if [ ! -f "$src" ]; then
-            echo "::error::artifact missing at $src"
-            echo "${{ matrix.libname }} anywhere in workspace:"
-            find . -type f -name "${{ matrix.libname }}" 2>/dev/null
-            exit 1
-          fi
           dest="${{ matrix.artifact }}"
           cp "$src" "$dest"
           if [ "$RUNNER_OS" = "macOS" ]; then
