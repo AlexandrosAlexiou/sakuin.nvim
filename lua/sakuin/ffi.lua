@@ -202,12 +202,14 @@ local function on_async_notification()
 		local callback = search_callbacks[generation]
 		if callback then
 			if msg_type == "batch" then
+				---@cast data table
 				callback("batch", data, nil, total)
 			elseif msg_type == "done" then
 				search_callbacks[generation] = nil
 				callback("done", nil, nil, total)
 			elseif msg_type == "error" then
 				search_callbacks[generation] = nil
+				---@cast data string
 				callback("error", nil, data, nil)
 			end
 		end
@@ -239,7 +241,7 @@ local function setup_async_handle()
 		)
 	end
 
-	lib.sakuin_register_async_notifier(ffi.cast("void*", handle_ptr), ffi.cast("void*", send_fn_ptr))
+	get_lib().sakuin_register_async_notifier(ffi.cast("void*", handle_ptr), ffi.cast("void*", send_fn_ptr))
 end
 
 function M.load()
