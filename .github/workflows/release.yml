@@ -68,15 +68,7 @@ jobs:
       - name: Stage artifact
         shell: bash
         run: |
-          src=$(find . -type f -name "${{ matrix.libname }}" \
-            -path "*/${{ matrix.target }}/release/*" 2>/dev/null | head -1)
-          if [ -z "$src" ]; then
-            echo "::error::artifact ${{ matrix.libname }} not at expected path"
-            echo "${{ matrix.libname }} anywhere in workspace:"
-            find . -type f -name "${{ matrix.libname }}" 2>/dev/null
-            exit 1
-          fi
-          echo "found at $src"
+          src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
           dest="${{ matrix.artifact }}"
           cp "$src" "$dest"
           if [ "$RUNNER_OS" = "macOS" ]; then
