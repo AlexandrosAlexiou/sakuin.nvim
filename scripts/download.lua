@@ -33,12 +33,8 @@ M.artifacts = {
 ---@param triple string
 ---@return string runtime filename Neovim looks for under build/
 local function local_name_for(triple)
-	if triple:find("apple%-darwin$") then
-		return "libsakuin.dylib"
-	end
-	if triple:find("windows") then
-		return "sakuin.dll"
-	end
+	if triple:find("apple%-darwin$") then return "libsakuin.dylib" end
+	if triple:find("windows") then return "sakuin.dll" end
 	return "libsakuin.so"
 end
 
@@ -53,33 +49,25 @@ end
 
 ---@return "musl"|"gnu"
 local function detect_libc()
-	if file_exists("/etc/alpine-release") then
-		return "musl"
-	end
+	if file_exists("/etc/alpine-release") then return "musl" end
 	for _, p in ipairs({
 		"/lib/ld-musl-x86_64.so.1",
 		"/lib/ld-musl-aarch64.so.1",
 	}) do
-		if file_exists(p) then
-			return "musl"
-		end
+		if file_exists(p) then return "musl" end
 	end
 	-- ldd on musl prints "musl libc"; on glibc prints "GNU libc" / "GLIBC"
 	local handle = io.popen("ldd --version 2>&1")
 	if handle then
 		local out = handle:read("*a") or ""
 		handle:close()
-		if out:lower():find("musl") then
-			return "musl"
-		end
+		if out:lower():find("musl") then return "musl" end
 	end
 	return "gnu"
 end
 
 local function detect_android()
-	if os.getenv("ANDROID_ROOT") or os.getenv("ANDROID_DATA") then
-		return true
-	end
+	if os.getenv("ANDROID_ROOT") or os.getenv("ANDROID_DATA") then return true end
 	return file_exists("/system/build.prop")
 end
 
@@ -91,21 +79,13 @@ local function detect_arch()
 		handle:close()
 		if out then
 			out = out:lower()
-			if out == "x86_64" or out == "amd64" then
-				return "x86_64"
-			end
-			if out == "arm64" or out == "aarch64" then
-				return "aarch64"
-			end
+			if out == "x86_64" or out == "amd64" then return "x86_64" end
+			if out == "arm64" or out == "aarch64" then return "aarch64" end
 		end
 	end
 	if jit and jit.arch then
-		if jit.arch == "x64" then
-			return "x86_64"
-		end
-		if jit.arch == "arm64" then
-			return "aarch64"
-		end
+		if jit.arch == "x64" then return "x86_64" end
+		if jit.arch == "arm64" then return "aarch64" end
 	end
 	return nil
 end
@@ -115,28 +95,18 @@ function M.detect_triple()
 	local uname = (vim.uv or vim.loop).os_uname()
 	local sys = uname.sysname or ""
 	local arch = detect_arch()
-	if not arch then
-		return nil
-	end
+	if not arch then return nil end
 
-	if sys == "Darwin" then
-		return arch .. "-apple-darwin"
-	end
+	if sys == "Darwin" then return arch .. "-apple-darwin" end
 	if sys == "Windows_NT" or sys:match("^MINGW") or sys:match("^MSYS") or sys:match("^CYGWIN") then
 		return arch .. "-pc-windows-msvc"
 	end
 	if sys == "Linux" then
-		if detect_android() and arch == "aarch64" then
-			return "aarch64-linux-android"
-		end
+		if detect_android() and arch == "aarch64" then return "aarch64-linux-android" end
 		return arch .. "-unknown-linux-" .. detect_libc()
 	end
-	if sys == "FreeBSD" then
-		return arch .. "-unknown-freebsd"
-	end
-	if sys == "OpenBSD" then
-		return arch .. "-unknown-openbsd"
-	end
+	if sys == "FreeBSD" then return arch .. "-unknown-freebsd" end
+	if sys == "OpenBSD" then return arch .. "-unknown-openbsd" end
 	return nil
 end
 
@@ -166,9 +136,7 @@ end
 local function curl_result(result)
 	if result.code ~= 0 then
 		local stderr = (result.stderr or ""):gsub("^%s+", ""):gsub("%s+$", "")
-		if stderr == "" then
-			stderr = "curl exited with code " .. tostring(result.code)
-		end
+		if stderr == "" then stderr = "curl exited with code " .. tostring(result.code) end
 		return false, stderr
 	end
 	return true, nil
@@ -178,24 +146,16 @@ end
 ---@param dest string
 ---@param on_done fun(ok: boolean, err?: string)
 local function curl_async(url, dest, on_done)
-	vim.system(curl_args(url, dest), { text = true }, vim.schedule_wrap(function(result)
-		on_done(curl_result(result))
-	end))
+	vim.system(curl_args(url, dest), { text = true }, vim.schedule_wrap(function(result) on_done(curl_result(result)) end))
 end
 
 ---@param triple string
 ---@param path string
 ---@return string[]
 local function sha256_cmd(triple, path)
-	if triple:find("apple%-darwin") then
-		return { "shasum", "-a", "256", path }
-	end
-	if triple:find("windows") then
-		return { "certutil", "-hashfile", path, "SHA256" }
-	end
-	if triple:find("openbsd") then
-		return { "sha256", path }
-	end
+	if triple:find("apple%-darwin") then return { "shasum", "-a", "256", path } end
+	if triple:find("windows") then return { "certutil", "-hashfile", path, "SHA256" } end
+	if triple:find("openbsd") then return { "sha256", path } end
 	-- linux (incl. android), freebsd
 	return { "sha256sum", path }
 end
@@ -208,9 +168,7 @@ local function parse_sha256_stdout(triple, stdout)
 		-- certutil prints a header line, then hex (occasionally space-separated bytes), then a footer.
 		for line in stdout:gmatch("[^\r\n]+") do
 			local hex = line:gsub("%s", ""):lower()
-			if hex:match("^%x+$") and #hex == 64 then
-				return hex
-			end
+			if hex:match("^%x+$") and #hex == 64 then return hex end
 		end
 		return nil
 	end
@@ -229,15 +187,11 @@ end
 ---@return string? error
 local function read_expected_sha(sidecar_path)
 	local f = io.open(sidecar_path, "r")
-	if not f then
-		return nil, "could not open sidecar " .. sidecar_path
-	end
+	if not f then return nil, "could not open sidecar " .. sidecar_path end
 	local content = f:read("*a") or ""
 	f:close()
 	local hex = content:match("(%x+)")
-	if not hex or #hex ~= 64 then
-		return nil, "sidecar empty or malformed: " .. sidecar_path
-	end
+	if not hex or #hex ~= 64 then return nil, "sidecar empty or malformed: " .. sidecar_path end
 	return hex:lower(), nil
 end
 
@@ -259,25 +213,29 @@ local function verify_checksum_async(triple, binary_path, sidecar_path, on_done)
 		return
 	end
 
-	vim.system(cmd, { text = true }, vim.schedule_wrap(function(result)
-		if result.code ~= 0 then
-			local stderr = (result.stderr or ""):gsub("%s+$", "")
-			on_done(false, "hash command failed: " .. (stderr ~= "" and stderr or ("exit " .. result.code)))
-			return
-		end
+	vim.system(
+		cmd,
+		{ text = true },
+		vim.schedule_wrap(function(result)
+			if result.code ~= 0 then
+				local stderr = (result.stderr or ""):gsub("%s+$", "")
+				on_done(false, "hash command failed: " .. (stderr ~= "" and stderr or ("exit " .. result.code)))
+				return
+			end
 
-		local actual = parse_sha256_stdout(triple, result.stdout or "")
-		if not actual then
-			on_done(false, "could not parse hash from `" .. cmd[1] .. "` output")
-			return
-		end
+			local actual = parse_sha256_stdout(triple, result.stdout or "")
+			if not actual then
+				on_done(false, "could not parse hash from `" .. cmd[1] .. "` output")
+				return
+			end
 
-		if expected ~= actual then
-			on_done(false, string.format("expected %s, got %s", expected, actual))
-			return
-		end
-		on_done(true, nil)
-	end))
+			if expected ~= actual then
+				on_done(false, string.format("expected %s, got %s", expected, actual))
+				return
+			end
+			on_done(true, nil)
+		end)
+	)
 end
 
 ---@param version? string
@@ -335,22 +293,20 @@ function M.download(version, on_done)
 					return
 				end
 
-				local function finish()
-					on_done(true)
-				end
+				local function finish() on_done(true) end
 
 				if not triple:find("windows") then
-					vim.system({ "chmod", "+x", dest }, { text = true }, vim.schedule_wrap(function()
-						if triple:find("apple%-darwin") then
-							vim.system(
-								{ "xattr", "-d", "com.apple.quarantine", dest },
-								{ text = true },
-								vim.schedule_wrap(finish)
-							)
-						else
-							finish()
-						end
-					end))
+					vim.system(
+						{ "chmod", "+x", dest },
+						{ text = true },
+						vim.schedule_wrap(function()
+							if triple:find("apple%-darwin") then
+								vim.system({ "xattr", "-d", "com.apple.quarantine", dest }, { text = true }, vim.schedule_wrap(finish))
+							else
+								finish()
+							end
+						end)
+					)
 				else
 					finish()
 				end

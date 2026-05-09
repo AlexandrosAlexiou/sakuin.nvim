@@ -26,9 +26,7 @@ end
 local function read_log_file()
 	local path = log_file_path()
 	local file = io.open(path, "r")
-	if not file then
-		return { "  (no log file found at " .. path .. ")" }
-	end
+	if not file then return { "  (no log file found at " .. path .. ")" } end
 
 	local lines = {}
 	for line in file:lines() do
@@ -36,18 +34,14 @@ local function read_log_file()
 	end
 	file:close()
 
-	if #lines == 0 then
-		lines = { "  (log file is empty — try :SakuinLogs debug to enable debug logging)" }
-	end
+	if #lines == 0 then lines = { "  (log file is empty — try :SakuinLogs debug to enable debug logging)" } end
 
 	return lines
 end
 
 ---@param lines string[]
 local function render(lines)
-	if not log_bufnr or not vim.api.nvim_buf_is_valid(log_bufnr) then
-		return
-	end
+	if not log_bufnr or not vim.api.nvim_buf_is_valid(log_bufnr) then return end
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = log_bufnr })
 	vim.api.nvim_buf_set_lines(log_bufnr, 0, -1, false, lines)
@@ -59,14 +53,7 @@ local function render(lines)
 			-- Level appears after the timestamp: "2026-04-25 11:58:27.123 INFO  [..."
 			local col_start = line:find(level_str, 1, true)
 			if col_start then
-				vim.api.nvim_buf_add_highlight(
-					log_bufnr,
-					-1,
-					hl_group,
-					i - 1,
-					col_start - 1,
-					col_start - 1 + #level_str
-				)
+				vim.api.nvim_buf_add_highlight(log_bufnr, -1, hl_group, i - 1, col_start - 1, col_start - 1 + #level_str)
 				break
 			end
 		end
@@ -100,9 +87,7 @@ local function refresh()
 end
 
 local function start_timer()
-	if refresh_timer then
-		return
-	end
+	if refresh_timer then return end
 	refresh_timer = vim.uv.new_timer()
 	refresh_timer:start(0, REFRESH_MS, vim.schedule_wrap(refresh))
 end
@@ -185,9 +170,7 @@ function M.close()
 	stop_timer()
 	if log_bufnr and vim.api.nvim_buf_is_valid(log_bufnr) then
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
-			if vim.api.nvim_win_get_buf(win) == log_bufnr then
-				vim.api.nvim_win_close(win, true)
-			end
+			if vim.api.nvim_win_get_buf(win) == log_bufnr then vim.api.nvim_win_close(win, true) end
 		end
 	end
 	log_bufnr = nil

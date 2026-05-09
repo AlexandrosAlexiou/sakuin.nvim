@@ -34,9 +34,7 @@ function M.sakuin(opts)
 		---@async
 		return function(callback)
 			local search = ctx.filter and ctx.filter.search or ""
-			if search == "" then
-				return
-			end
+			if search == "" then return end
 
 			generation = generation + 1
 			local my_gen = generation
@@ -63,11 +61,7 @@ function M.sakuin(opts)
 			local ok, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
 			if not ok then
 				sakuin_ffi.unregister_search_callback(my_gen)
-				if submit_err then
-					vim.schedule(function()
-						vim.notify("[sakuin] " .. submit_err, vim.log.levels.ERROR)
-					end)
-				end
+				if submit_err then vim.schedule(function() vim.notify("[sakuin] " .. submit_err, vim.log.levels.ERROR) end) end
 				return
 			end
 
@@ -78,21 +72,15 @@ function M.sakuin(opts)
 					emit_items(batch, callback)
 					yield()
 				end
-				if not done then
-					ctx.async:suspend()
-				end
+				if not done then ctx.async:suspend() end
 			end
 
-			if #pending > 0 then
-				emit_items(pending, callback)
-			end
+			if #pending > 0 then emit_items(pending, callback) end
 
 			sakuin_ffi.unregister_search_callback(my_gen)
 
 			if error_msg then
-				vim.schedule(function()
-					vim.notify("[sakuin] search error: " .. error_msg, vim.log.levels.ERROR)
-				end)
+				vim.schedule(function() vim.notify("[sakuin] search error: " .. error_msg, vim.log.levels.ERROR) end)
 			end
 		end
 	end

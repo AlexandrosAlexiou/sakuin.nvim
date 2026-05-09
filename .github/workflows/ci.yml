@@ -19,7 +19,9 @@ jobs:
       matrix:
         check: [test, clippy, fmt]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
