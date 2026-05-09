@@ -87,9 +87,7 @@ local initialized = false
 
 ---@return ffi.namespace*
 local function get_lib()
-	if not lib then
-		error("[sakuin] native library not loaded — call require('sakuin').setup() first", 2)
-	end
+	if not lib then error("[sakuin] native library not loaded — call require('sakuin').setup() first", 2) end
 	return lib
 end
 
@@ -118,18 +116,14 @@ end
 
 -- ffi.string segfaults on NULL (calls strlen).
 local function safe_str(p)
-	if p == nil then
-		return ""
-	end
+	if p == nil then return "" end
 	return ffi.string(p)
 end
 
 -- Drain a SakuinStatus: returns nil on success, or the error message on
 -- failure. Frees the heap-allocated error string on the way out.
 local function status_to_err(status)
-	if status.err == nil then
-		return nil
-	end
+	if status.err == nil then return nil end
 	local msg = ffi.string(status.err)
 	lib.sakuin_free_string(status.err)
 	return msg
@@ -184,35 +178,25 @@ local function decode_indexing_event(ptr)
 		total = tonumber(ptr.total),
 		done = tonumber(ptr.done),
 	}
-	if ptr.error ~= nil then
-		event.error = ffi.string(ptr.error)
-	end
-	if ptr.message ~= nil then
-		event.message = ffi.string(ptr.message)
-	end
+	if ptr.error ~= nil then event.error = ffi.string(ptr.error) end
+	if ptr.message ~= nil then event.message = ffi.string(ptr.message) end
 
 	lib.sakuin_free_indexing_event(ptr)
 	return event
 end
 
 local function on_async_notification()
-	if not lib then
-		return
-	end
+	if not lib then return end
 
 	local idx_raw = lib.sakuin_indexing_take_event()
 	if idx_raw ~= nil then
 		local event = decode_indexing_event(idx_raw)
-		if lua_indexing_callback then
-			lua_indexing_callback(event)
-		end
+		if lua_indexing_callback then lua_indexing_callback(event) end
 	end
 
 	while true do
 		local raw = lib.sakuin_search_take_result()
-		if raw == nil then
-			break
-		end
+		if raw == nil then break end
 
 		local msg_type, generation, data, total = decode_search_message(raw)
 		local callback = search_callbacks[generation]
@@ -246,9 +230,7 @@ local function setup_async_handle()
 	local handle_ptr = ffi.cast("void**", async_handle)[0]
 
 	-- Resolve uv_async_send from Neovim's exported libuv symbols.
-	local ok_send, send_fn_ptr = pcall(function()
-		return ffi.C.uv_async_send
-	end)
+	local ok_send, send_fn_ptr = pcall(function() return ffi.C.uv_async_send end)
 	if not ok_send then
 		error(
 			"[sakuin] Could not resolve uv_async_send from the C namespace. "
@@ -261,9 +243,7 @@ local function setup_async_handle()
 end
 
 function M.load()
-	if lib and async_handle then
-		return
-	end
+	if lib and async_handle then return end
 
 	if not lib then
 		local lib_path = resolve_lib_path()
@@ -278,15 +258,11 @@ function M.load()
 		lib = ffi.load(lib_path)
 	end
 
-	if not async_handle then
-		setup_async_handle()
-	end
+	if not async_handle then setup_async_handle() end
 end
 
 ---@return boolean
-function M.is_loaded()
-	return lib ~= nil and initialized
-end
+function M.is_loaded() return lib ~= nil and initialized end
 
 ---@param project_root string
 ---@param index_dir string
@@ -295,21 +271,15 @@ end
 ---@return string|nil err
 function M.init(project_root, index_dir, config_json)
 	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))
-	if err then
-		return false, err
-	end
+	if err then return false, err end
 	initialized = true
 	return true, nil
 end
 
 function M.shutdown()
 	initialized = false
-	if lib then
-		lib.sakuin_shutdown()
-	end
-	if async_handle and not async_handle:is_closing() then
-		async_handle:close()
-	end
+	if lib then lib.sakuin_shutdown() end
+	if async_handle and not async_handle:is_closing() then async_handle:close() end
 	async_handle = nil
 end
 
@@ -328,9 +298,7 @@ function M.reinit(project_root, index_dir, config_json)
 	setup_async_handle()
 
 	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))
-	if err then
-		return false, err
-	end
+	if err then return false, err end
 	initialized = true
 	return true, nil
 end
@@ -343,17 +311,13 @@ function M.start_watcher()
 end
 
 function M.stop_watcher()
-	if lib then
-		lib.sakuin_stop_watcher()
-	end
+	if lib then lib.sakuin_stop_watcher() end
 end
 
 -- Callbacks fire on the main Neovim thread (via uv_async + vim.schedule).
 -- Indexing event shape: { status="done"|"error", total, done, error? }.
 ---@param callback fun(event: table)|nil
-function M.set_indexing_callback(callback)
-	lua_indexing_callback = callback
-end
+function M.set_indexing_callback(callback) lua_indexing_callback = callback end
 
 -- Search callback args: (msg_type, results_or_nil, error_or_nil, total_or_nil).
 -- "batch": results = matches, total = cumulative count so far.
@@ -363,18 +327,12 @@ end
 -- (e.g. picker close before any terminal event arrives).
 ---@param generation number
 ---@param callback fun(msg_type: string, results: table|nil, error: string|nil, total: number|nil)
-function M.register_search_callback(generation, callback)
-	search_callbacks[generation] = callback
-end
+function M.register_search_callback(generation, callback) search_callbacks[generation] = callback end
 
 ---@param generation number
-function M.unregister_search_callback(generation)
-	search_callbacks[generation] = nil
-end
+function M.unregister_search_callback(generation) search_callbacks[generation] = nil end
 
-function M.clear_search_callbacks()
-	search_callbacks = {}
-end
+function M.clear_search_callbacks() search_callbacks = {} end
 
 -- Submit a search to the persistent worker thread. Any in-flight search is
 -- automatically cancelled. Results stream back via the registered callback.
@@ -388,9 +346,7 @@ function M.search_submit(query, generation, limit)
 	return err == nil, err
 end
 
-function M.search_cancel()
-	get_lib().sakuin_search_cancel()
-end
+function M.search_cancel() get_lib().sakuin_search_cancel() end
 
 ---@return table|nil stats
 ---@return string|nil err
@@ -398,14 +354,10 @@ function M.stats()
 	local l = get_lib()
 	local out = ffi.new("SakuinIndexStats*[1]")
 	local err = status_to_err(l.sakuin_stats(out))
-	if err then
-		return nil, err
-	end
+	if err then return nil, err end
 
 	local raw = out[0]
-	if raw == nil then
-		return nil, "stats returned null"
-	end
+	if raw == nil then return nil, "stats returned null" end
 
 	local stats = {
 		num_docs = tonumber(raw.num_docs),
@@ -440,8 +392,6 @@ function M.set_log_level(level)
 	return err == nil, err
 end
 
-function M.clear_logs()
-	get_lib().sakuin_clear_logs()
-end
+function M.clear_logs() get_lib().sakuin_clear_logs() end
 
 return M

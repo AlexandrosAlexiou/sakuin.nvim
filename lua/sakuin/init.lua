@@ -1,11 +1,7 @@
 local M = {}
 
 local function start_watcher_if_enabled(ffi_mod, config)
-	if config.watch then
-		vim.schedule(function()
-			ffi_mod.start_watcher()
-		end)
-	end
+	if config.watch then vim.schedule(function() ffi_mod.start_watcher() end) end
 end
 
 ---@param ffi_mod table
@@ -18,12 +14,8 @@ local function watch_indexing(ffi_mod, label, on_done)
 	progress.start(label)
 
 	ffi_mod.set_indexing_callback(function(event)
-		if finished then
-			return
-		end
-		if event.status == "progress" then
-			return
-		end
+		if finished then return end
+		if event.status == "progress" then return end
 
 		finished = true
 		ffi_mod.set_indexing_callback(nil)
@@ -32,9 +24,7 @@ local function watch_indexing(ffi_mod, label, on_done)
 			local stats = ffi_mod.stats()
 			local msg = stats and string.format("%d files indexed", stats.num_docs) or "complete"
 			progress.done(msg)
-			if on_done then
-				on_done()
-			end
+			if on_done then on_done() end
 		else
 			progress.fail(label, event.error or "unknown error")
 		end
@@ -90,9 +80,7 @@ end
 ---@param config table
 local function reinit_engine(config)
 	local ffi_mod = require("sakuin.ffi")
-	if not ffi_mod.is_loaded() then
-		return
-	end
+	if not ffi_mod.is_loaded() then return end
 
 	local root = vim.fn.getcwd()
 	local index_dir = root .. "/.sakuin"
@@ -107,10 +95,7 @@ local function reinit_engine(config)
 
 	local ok, reinit_err = ffi_mod.reinit(root, index_dir, rust_config)
 	if not ok then
-		vim.notify(
-			"[sakuin] Failed to reinitialize: " .. (reinit_err or "unknown error"),
-			vim.log.levels.ERROR
-		)
+		vim.notify("[sakuin] Failed to reinitialize: " .. (reinit_err or "unknown error"), vim.log.levels.ERROR)
 		return
 	end
 
@@ -118,9 +103,7 @@ local function reinit_engine(config)
 		if config.update_on_start then
 			local update_ok = ffi_mod.update_index_async()
 			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", function()
-					start_watcher_if_enabled(ffi_mod, config)
-				end)
+				watch_indexing(ffi_mod, "Syncing", function() start_watcher_if_enabled(ffi_mod, config) end)
 			else
 				start_watcher_if_enabled(ffi_mod, config)
 			end
@@ -134,26 +117,17 @@ end
 ---@param config table
 local function deferred_startup(config)
 	local index_dir = vim.fn.getcwd() .. "/.sakuin"
-	if vim.fn.isdirectory(index_dir) == 0 then
-		return
-	end
+	if vim.fn.isdirectory(index_dir) == 0 then return end
 
 	init_engine_async(config, function(ffi_mod)
-		if not ffi_mod then
-			return
-		end
+		if not ffi_mod then return end
 
 		if config.update_on_start then
 			local update_ok, update_err = ffi_mod.update_index_async()
 			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", function()
-					start_watcher_if_enabled(ffi_mod, config)
-				end)
+				watch_indexing(ffi_mod, "Syncing", function() start_watcher_if_enabled(ffi_mod, config) end)
 			else
-				vim.notify(
-					"[sakuin] Failed to start async update: " .. (update_err or "unknown"),
-					vim.log.levels.ERROR
-				)
+				vim.notify("[sakuin] Failed to start async update: " .. (update_err or "unknown"), vim.log.levels.ERROR)
 				start_watcher_if_enabled(ffi_mod, config)
 			end
 		else
@@ -169,9 +143,7 @@ function M.setup(opts)
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		callback = function()
 			local ffi_mod = require("sakuin.ffi")
-			if ffi_mod.is_loaded() then
-				ffi_mod.shutdown()
-			end
+			if ffi_mod.is_loaded() then ffi_mod.shutdown() end
 		end,
 		desc = "Shut down sakuin engine on exit",
 	})
@@ -211,9 +183,7 @@ function M.setup(opts)
 		end
 	end
 
-	vim.schedule(function()
-		deferred_startup(config)
-	end)
+	vim.schedule(function() deferred_startup(config) end)
 end
 
 -- Lazy-inits engine if not already loaded.
@@ -221,9 +191,7 @@ end
 function M.async_index(mode)
 	local config = require("sakuin.config").get()
 	init_engine_async(config, function(ffi_mod)
-		if not ffi_mod then
-			return
-		end
+		if not ffi_mod then return end
 
 		local progress = require("sakuin.progress")
 		if progress.is_indexing then
@@ -236,9 +204,7 @@ function M.async_index(mode)
 
 		local ok, err = fn_async()
 		if ok then
-			watch_indexing(ffi_mod, label, function()
-				start_watcher_if_enabled(ffi_mod, config)
-			end)
+			watch_indexing(ffi_mod, label, function() start_watcher_if_enabled(ffi_mod, config) end)
 		else
 			vim.notify("[sakuin] Failed to start: " .. (err or "unknown"), vim.log.levels.ERROR)
 		end
@@ -250,9 +216,7 @@ function M.clean()
 	local ffi_mod = require("sakuin.ffi")
 
 	-- Shut down the engine first if running (releases file handles on the index)
-	if ffi_mod.is_loaded() then
-		ffi_mod.shutdown()
-	end
+	if ffi_mod.is_loaded() then ffi_mod.shutdown() end
 
 	local index_dir = vim.fn.getcwd() .. "/.sakuin"
 	if vim.fn.isdirectory(index_dir) == 1 then

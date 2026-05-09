@@ -48,9 +48,7 @@ local download_in_progress = false
 local download_pending = {}
 
 ---@return boolean
-function M.is_installing()
-	return download_in_progress or build_in_progress
-end
+function M.is_installing() return download_in_progress or build_in_progress end
 
 ---@param on_done fun(ok: boolean, err?: string)
 local function build_async(on_done)
@@ -66,9 +64,7 @@ local function build_async(on_done)
 	vim.fn.mkdir(root .. "/build", "p")
 	local log = io.open(log_path, "w")
 	local function on_chunk(_, data)
-		if log and data then
-			log:write(data)
-		end
+		if log and data then log:write(data) end
 	end
 
 	local cmd
@@ -89,9 +85,7 @@ local function build_async(on_done)
 			stderr = on_chunk,
 		},
 		vim.schedule_wrap(function(result)
-			if log then
-				log:close()
-			end
+			if log then log:close() end
 
 			if result.code ~= 0 then
 				on_done(false, "build failed (log: " .. log_path .. ")")
@@ -165,30 +159,33 @@ function M.ensure_binary(opts, on_ready)
 	download_in_progress = true
 	vim.notify("Downloading prebuilt binary…", vim.log.levels.INFO, { title = "sakuin" })
 
-	try_download_async(opts.version, vim.schedule_wrap(function(dl_ok, dl_err)
-		download_in_progress = false
-		local waiters = download_pending
-		download_pending = {}
+	try_download_async(
+		opts.version,
+		vim.schedule_wrap(function(dl_ok, dl_err)
+			download_in_progress = false
+			local waiters = download_pending
+			download_pending = {}
 
-		if dl_ok then
-			vim.notify("Prebuilt binary installed.", vim.log.levels.INFO, { title = "sakuin" })
-			on_ready(true)
-			for _, cb in ipairs(waiters) do
-				cb(true)
+			if dl_ok then
+				vim.notify("Prebuilt binary installed.", vim.log.levels.INFO, { title = "sakuin" })
+				on_ready(true)
+				for _, cb in ipairs(waiters) do
+					cb(true)
+				end
+				return
 			end
-			return
-		end
 
-		vim.notify("Prebuilt download failed: " .. (dl_err or "unknown"), vim.log.levels.WARN, { title = "sakuin" })
+			vim.notify("Prebuilt download failed: " .. (dl_err or "unknown"), vim.log.levels.WARN, { title = "sakuin" })
 
-		-- Give snacks one scheduler tick to render the WARN before the next notify.
-		vim.schedule(function()
-			start_or_join_build(on_ready)
-			for _, cb in ipairs(waiters) do
-				start_or_join_build(cb)
-			end
+			-- Give snacks one scheduler tick to render the WARN before the next notify.
+			vim.schedule(function()
+				start_or_join_build(on_ready)
+				for _, cb in ipairs(waiters) do
+					start_or_join_build(cb)
+				end
+			end)
 		end)
-	end))
+	)
 end
 
 return M

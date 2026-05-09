@@ -1,0 +1,32 @@
+name: Stylua
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.lua"
+      - .stylua.toml
+      - .github/workflows/stylua.yml
+  pull_request:
+    paths:
+      - "**/*.lua"
+      - .stylua.toml
+      - .github/workflows/stylua.yml
+
+jobs:
+  stylua:
+    name: Check Lua formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --color=always --check .
