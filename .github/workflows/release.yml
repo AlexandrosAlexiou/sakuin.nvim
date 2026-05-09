@@ -67,18 +67,11 @@ jobs:
       - name: Stage artifact
         shell: bash
         run: |
-          # cross-rs bind-mounts the git root, which puts the target dir at
-          # <repo>/target/ rather than <repo>/rust/target/. Locate the file
-          # rather than hard-coding a path that depends on cross's quirks.
-          src=$(find . -type f -name "${{ matrix.libname }}" \
-            -path "*/${{ matrix.target }}/release/*" 2>/dev/null | head -1)
-          if [ -z "$src" ]; then
-            echo "::error::artifact ${{ matrix.libname }} not found for ${{ matrix.target }}"
-            echo "candidate files in tree:"
-            find . -type f \( -name 'libsakuin*' -o -name 'sakuin.dll' -o -name 'sakuin.dylib' \) 2>/dev/null | head -50
-            exit 1
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            src="target/${{ matrix.target }}/release/${{ matrix.libname }}"
+          else
+            src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
           fi
-          echo "staging $src"
           dest="${{ matrix.artifact }}"
           cp "$src" "$dest"
           if [ "$RUNNER_OS" = "macOS" ]; then
