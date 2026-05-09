@@ -13,46 +13,65 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Linux glibc
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu,    libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-gnu.so,    toolchain: stable,  components: "",         extra_args: "" }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu,   libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-gnu.so,   toolchain: stable,  components: "",         extra_args: "" }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu,    libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-gnu.so }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu,   libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-gnu.so }
           # Linux musl
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,   libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-musl.so,   toolchain: stable,  components: "",         extra_args: "" }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl,  libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-musl.so,  toolchain: stable,  components: "",         extra_args: "" }
-          # FreeBSD
-          - { os: ubuntu-latest, target: x86_64-unknown-freebsd,      libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-freebsd.so,      toolchain: stable,  components: "",         extra_args: "" }
-          - { os: ubuntu-latest, target: aarch64-unknown-freebsd,     libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-freebsd.so,     toolchain: stable,  components: "",         extra_args: "" }
-          # OpenBSD (tier 3 — needs nightly + rust-src + -Z build-std)
-          - { os: ubuntu-latest, target: x86_64-unknown-openbsd,      libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-openbsd.so,      toolchain: nightly, components: "rust-src", extra_args: "-Z build-std=std,panic_abort" }
-          - { os: ubuntu-latest, target: aarch64-unknown-openbsd,     libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-openbsd.so,     toolchain: nightly, components: "rust-src", extra_args: "-Z build-std=std,panic_abort" }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,   libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-musl.so }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl,  libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-musl.so }
+          # FreeBSD x86_64 (tier 2 — has prebuilt std, built via cross)
+          - { os: ubuntu-latest, target: x86_64-unknown-freebsd,      libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-freebsd.so }
           # Android
-          - { os: ubuntu-latest, target: aarch64-linux-android,       libname: libsakuin.so,    artifact: libsakuin-aarch64-linux-android.so,       toolchain: stable,  components: "",         extra_args: "" }
+          - { os: ubuntu-latest, target: aarch64-linux-android,       libname: libsakuin.so,    artifact: libsakuin-aarch64-linux-android.so }
           # macOS
-          - { os: macos-14,      target: aarch64-apple-darwin,        libname: libsakuin.dylib, artifact: libsakuin-aarch64-apple-darwin.dylib,     toolchain: stable,  components: "",         extra_args: "" }
-          - { os: macos-14,      target: x86_64-apple-darwin,         libname: libsakuin.dylib, artifact: libsakuin-x86_64-apple-darwin.dylib,      toolchain: stable,  components: "",         extra_args: "" }
+          - { os: macos-14,      target: aarch64-apple-darwin,        libname: libsakuin.dylib, artifact: libsakuin-aarch64-apple-darwin.dylib }
+          - { os: macos-14,      target: x86_64-apple-darwin,         libname: libsakuin.dylib, artifact: libsakuin-x86_64-apple-darwin.dylib }
           # Windows MSVC
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,     libname: sakuin.dll,      artifact: sakuin-x86_64-pc-windows-msvc.dll,        toolchain: stable,  components: "",         extra_args: "" }
-          - { os: windows-latest, target: aarch64-pc-windows-msvc,    libname: sakuin.dll,      artifact: sakuin-aarch64-pc-windows-msvc.dll,       toolchain: stable,  components: "",         extra_args: "" }
-    runs-on: ${{ matrix.os }}
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,     libname: sakuin.dll,      artifact: sakuin-x86_64-pc-windows-msvc.dll }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc,    libname: sakuin.dll,      artifact: sakuin-aarch64-pc-windows-msvc.dll }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Build
-        uses: houseabsolute/actions-rust-cross@v1
-        with:
-          target: ${{ matrix.target }}
-          toolchain: ${{ matrix.toolchain }}
-          components: ${{ matrix.components }}
-          args: "--manifest-path rust/Cargo.toml --release --lib ${{ matrix.extra_args }}"
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Build (cross — Linux/Android/FreeBSD)
+        if: contains(matrix.os, 'ubuntu')
+        working-directory: rust
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          cross build --release --lib --target ${{ matrix.target }}
+
+      - name: Build (native — macOS)
+        if: contains(matrix.os, 'macos')
+        working-directory: rust
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13"
+        run: cargo build --release --lib --target ${{ matrix.target }}
+
+      - name: Build (native — Windows)
+        if: contains(matrix.os, 'windows')
+        working-directory: rust
+        shell: bash
+        run: cargo build --release --lib --target ${{ matrix.target }}
 
       - name: Stage artifact
         shell: bash
         run: |
-          src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            src="target/${{ matrix.target }}/release/${{ matrix.libname }}"
+          else
+            src="rust/target/${{ matrix.target }}/release/${{ matrix.libname }}"
+          fi
           dest="${{ matrix.artifact }}"
           cp "$src" "$dest"
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -65,7 +84,55 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+
+  # Tier-3 BSD targets have no precompiled rust-std and the cross-rs +
+  # build-std path is fragile. Build natively inside a real BSD VM.
+  build-bsd:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: freebsd, version: "14.2", arch: arm64,  target: aarch64-unknown-freebsd, artifact: libsakuin-aarch64-unknown-freebsd.so }
+          - { os: openbsd, version: "7.8",  arch: x86_64, target: x86_64-unknown-openbsd,  artifact: libsakuin-x86_64-unknown-openbsd.so }
+          - { os: openbsd, version: "7.8",  arch: arm64,  target: aarch64-unknown-openbsd, artifact: libsakuin-aarch64-unknown-openbsd.so }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build in ${{ matrix.os }} VM (${{ matrix.arch }})
+        uses: cross-platform-actions/action@v0.32.0
+        with:
+          operating_system: ${{ matrix.os }}
+          architecture: ${{ matrix.arch }}
+          version: ${{ matrix.version }}
+          memory: 4G
+          shell: sh
+          sync_files: true
+          run: |
+            if [ "${{ matrix.os }}" = "freebsd" ]; then
+              sudo pkg install -y rust
+            else
+              sudo pkg_add rust
+            fi
+            rustc -vV
+            cd rust
+            cargo build --release --lib
+
+      - name: Stage artifact
+        run: |
+          cp rust/target/release/libsakuin.so "${{ matrix.artifact }}"
+          sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.target }}
           path: |
@@ -74,10 +141,10 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, build-bsd]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true
