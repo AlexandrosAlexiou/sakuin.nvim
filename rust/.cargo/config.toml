@@ -1,0 +1,9 @@
+# musl defaults to +crt-static, which is incompatible with cdylib —
+# cargo silently skips the .so output and the build appears to succeed
+# with no artifact. Force the dynamic CRT for musl targets so the
+# cdylib actually gets produced.
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
