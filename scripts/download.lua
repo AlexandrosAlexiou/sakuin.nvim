@@ -7,6 +7,11 @@ local M = {}
 
 M.repo = "AlexandrosAlexiou/sakuin.nvim"
 
+-- Tag of the release whose binaries match this checkout. Bump on each
+-- release so downloads always target the artifacts produced for the code
+-- currently on disk, not whatever "latest" happens to point at.
+M.version = "v0.5.0"
+
 -- target triple → release artifact filename
 -- Convention: `lib<name>-<triple>.{so,dylib}` on unix, `<name>-<triple>.dll` on Windows.
 M.artifacts = {
@@ -141,12 +146,8 @@ function M.plugin_root()
 	return vim.fn.fnamemodify(source, ":h:h")
 end
 
----@param url string
----@param dest string
----@return boolean ok
----@return string? error
-local function curl_download(url, dest)
-	local args = {
+local function curl_args(url, dest)
+	return {
 		"curl",
 		"--fail",
 		"--location",
@@ -157,7 +158,12 @@ local function curl_download(url, dest)
 		dest,
 		url,
 	}
-	local result = vim.system(args, { text = true }):wait()
+end
+
+---@param result vim.SystemCompleted
+---@return boolean ok
+---@return string? error
+local function curl_result(result)
 	if result.code ~= 0 then
 		local stderr = (result.stderr or ""):gsub("^%s+", ""):gsub("%s+$", "")
 		if stderr == "" then
@@ -166,6 +172,15 @@ local function curl_download(url, dest)
 		return false, stderr
 	end
 	return true, nil
+end
+
+---@param url string
+---@param dest string
+---@param on_done fun(ok: boolean, err?: string)
+local function curl_async(url, dest, on_done)
+	vim.system(curl_args(url, dest), { text = true }, vim.schedule_wrap(function(result)
+		on_done(curl_result(result))
+	end))
 end
 
 ---@param triple string
@@ -229,44 +244,49 @@ end
 ---@param triple string
 ---@param binary_path string
 ---@param sidecar_path string
----@return boolean ok
----@return string? error
-local function verify_checksum(triple, binary_path, sidecar_path)
+---@param on_done fun(ok: boolean, err?: string)
+local function verify_checksum_async(triple, binary_path, sidecar_path, on_done)
 	local expected, read_err = read_expected_sha(sidecar_path)
 	if not expected then
-		return false, read_err
+		on_done(false, read_err)
+		return
 	end
 
 	local cmd = sha256_cmd(triple, binary_path)
 	if vim.fn.executable(cmd[1]) == 0 then
-		print("[sakuin] " .. cmd[1] .. " not found; skipping checksum verification")
-		return true, nil
+		vim.notify("[sakuin] " .. cmd[1] .. " not found; skipping checksum verification", vim.log.levels.WARN)
+		on_done(true, nil)
+		return
 	end
 
-	local result = vim.system(cmd, { text = true }):wait()
-	if result.code ~= 0 then
-		local stderr = (result.stderr or ""):gsub("%s+$", "")
-		return false, "hash command failed: " .. (stderr ~= "" and stderr or ("exit " .. result.code))
-	end
+	vim.system(cmd, { text = true }, vim.schedule_wrap(function(result)
+		if result.code ~= 0 then
+			local stderr = (result.stderr or ""):gsub("%s+$", "")
+			on_done(false, "hash command failed: " .. (stderr ~= "" and stderr or ("exit " .. result.code)))
+			return
+		end
 
-	local actual = parse_sha256_stdout(triple, result.stdout or "")
-	if not actual then
-		return false, "could not parse hash from `" .. cmd[1] .. "` output"
-	end
+		local actual = parse_sha256_stdout(triple, result.stdout or "")
+		if not actual then
+			on_done(false, "could not parse hash from `" .. cmd[1] .. "` output")
+			return
+		end
 
-	if expected ~= actual then
-		return false, string.format("expected %s, got %s", expected, actual)
-	end
-	return true, nil
+		if expected ~= actual then
+			on_done(false, string.format("expected %s, got %s", expected, actual))
+			return
+		end
+		on_done(true, nil)
+	end))
 end
 
----@param version? string Tag name (e.g. "v0.1.0"). nil = latest.
----@return boolean success
----@return string? error
-function M.download(version)
+---@param version? string
+---@param on_done fun(ok: boolean, err?: string)
+function M.download(version, on_done)
 	local triple = M.detect_triple()
 	if not triple or not M.artifacts[triple] then
-		return false, "Unsupported platform: " .. (triple or "unknown")
+		on_done(false, "Unsupported platform: " .. (triple or "unknown"))
+		return
 	end
 
 	local artifact = M.artifacts[triple]
@@ -279,61 +299,73 @@ function M.download(version)
 
 	vim.fn.mkdir(build_dir, "p")
 
-	local base
-	if version then
-		base = string.format("https://github.com/%s/releases/download/%s", M.repo, version)
-	else
-		base = string.format("https://github.com/%s/releases/latest/download", M.repo)
-	end
+	local tag = version or M.version
+	local base = string.format("https://github.com/%s/releases/download/%s", M.repo, tag)
 	local lib_url = base .. "/" .. artifact
 	local sha_url = lib_url .. ".sha256"
 
-	print("[sakuin] Downloading " .. artifact .. " ...")
-	local ok, err = curl_download(lib_url, dest_tmp)
-	if not ok then
-		os.remove(dest_tmp)
-		return false, "download failed (" .. lib_url .. "): " .. (err or "unknown")
-	end
+	curl_async(lib_url, dest_tmp, function(ok, err)
+		if not ok then
+			os.remove(dest_tmp)
+			on_done(false, "download failed (" .. lib_url .. "): " .. (err or "unknown"))
+			return
+		end
 
-	ok, err = curl_download(sha_url, sidecar)
-	if not ok then
-		os.remove(dest_tmp)
-		os.remove(sidecar)
-		return false, "sidecar download failed (" .. sha_url .. "): " .. (err or "unknown")
-	end
+		curl_async(sha_url, sidecar, function(sha_ok, sha_err)
+			if not sha_ok then
+				os.remove(dest_tmp)
+				os.remove(sidecar)
+				on_done(false, "sidecar download failed (" .. sha_url .. "): " .. (sha_err or "unknown"))
+				return
+			end
 
-	local v_ok, v_err = verify_checksum(triple, dest_tmp, sidecar)
-	if not v_ok then
-		os.remove(dest_tmp)
-		os.remove(sidecar)
-		return false, "checksum verification failed: " .. (v_err or "unknown")
-	end
+			verify_checksum_async(triple, dest_tmp, sidecar, function(v_ok, v_err)
+				if not v_ok then
+					os.remove(dest_tmp)
+					os.remove(sidecar)
+					on_done(false, "checksum verification failed: " .. (v_err or "unknown"))
+					return
+				end
 
-	local uv = vim.uv or vim.loop
-	local rn_ok, rn_err = uv.fs_rename(dest_tmp, dest)
-	if not rn_ok then
-		os.remove(dest_tmp)
-		return false, "rename failed: " .. tostring(rn_err or "unknown")
-	end
+				local uv = vim.uv or vim.loop
+				local rn_ok, rn_err = uv.fs_rename(dest_tmp, dest)
+				if not rn_ok then
+					os.remove(dest_tmp)
+					on_done(false, "rename failed: " .. tostring(rn_err or "unknown"))
+					return
+				end
 
-	if not triple:find("windows") then
-		vim.system({ "chmod", "+x", dest }):wait()
-	end
-	if triple:find("apple%-darwin") then
-		vim.system({ "xattr", "-d", "com.apple.quarantine", dest }, { text = true }):wait()
-	end
+				local function finish()
+					on_done(true)
+				end
 
-	print("[sakuin] Verified and installed " .. local_name)
-	return true, nil
+				if not triple:find("windows") then
+					vim.system({ "chmod", "+x", dest }, { text = true }, vim.schedule_wrap(function()
+						if triple:find("apple%-darwin") then
+							vim.system(
+								{ "xattr", "-d", "com.apple.quarantine", dest },
+								{ text = true },
+								vim.schedule_wrap(finish)
+							)
+						else
+							finish()
+						end
+					end))
+				else
+					finish()
+				end
+			end)
+		end)
+	end)
 end
 
--- If run directly (nvim -l scripts/download.lua), execute download
 if arg and arg[0] and arg[0]:match("download%.lua$") then
-	local ok, err = M.download(arg[1])
-	if not ok then
-		io.stderr:write("[sakuin] Error: " .. (err or "unknown") .. "\n")
-		os.exit(1)
-	end
+	M.download(arg[1], function(ok, err)
+		if not ok then
+			io.stderr:write("[sakuin] Error: " .. (err or "unknown") .. "\n")
+			os.exit(1)
+		end
+	end)
 end
 
 return M
