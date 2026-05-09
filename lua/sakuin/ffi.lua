@@ -125,7 +125,7 @@ end
 local function status_to_err(status)
 	if status.err == nil then return nil end
 	local msg = ffi.string(status.err)
-	lib.sakuin_free_string(status.err)
+	get_lib().sakuin_free_string(status.err)
 	return msg
 end
 
@@ -148,15 +148,15 @@ local function decode_search_message(ptr)
 			}
 		end
 		local total = tonumber(ptr.total)
-		lib.sakuin_free_search_message(ptr)
+		get_lib().sakuin_free_search_message(ptr)
 		return "batch", generation, results, total
 	elseif msg_type == 1 then -- Done
 		local total = tonumber(ptr.total)
-		lib.sakuin_free_search_message(ptr)
+		get_lib().sakuin_free_search_message(ptr)
 		return "done", generation, nil, total
 	else -- Error
 		local err = ptr.error ~= nil and ffi.string(ptr.error) or "unknown error"
-		lib.sakuin_free_search_message(ptr)
+		get_lib().sakuin_free_search_message(ptr)
 		return "error", generation, err, nil
 	end
 end
@@ -181,7 +181,7 @@ local function decode_indexing_event(ptr)
 	if ptr.error ~= nil then event.error = ffi.string(ptr.error) end
 	if ptr.message ~= nil then event.message = ffi.string(ptr.message) end
 
-	lib.sakuin_free_indexing_event(ptr)
+	get_lib().sakuin_free_indexing_event(ptr)
 	return event
 end
 

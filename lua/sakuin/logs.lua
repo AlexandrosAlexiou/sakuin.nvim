@@ -4,7 +4,7 @@
 local M = {}
 
 local log_bufnr = nil ---@type number|nil
-local refresh_timer = nil ---@type userdata|nil
+local refresh_timer = nil ---@type vim.uv.Timer|nil
 
 local REFRESH_MS = 1000
 
@@ -53,7 +53,10 @@ local function render(lines)
 			-- Level appears after the timestamp: "2026-04-25 11:58:27.123 INFO  [..."
 			local col_start = line:find(level_str, 1, true)
 			if col_start then
-				vim.api.nvim_buf_add_highlight(log_bufnr, -1, hl_group, i - 1, col_start - 1, col_start - 1 + #level_str)
+				vim.api.nvim_buf_set_extmark(log_bufnr, -1, i - 1, col_start - 1, {
+					end_col = col_start - 1 + #level_str,
+					hl_group = hl_group,
+				})
 				break
 			end
 		end
@@ -88,7 +91,9 @@ end
 
 local function start_timer()
 	if refresh_timer then return end
-	refresh_timer = vim.uv.new_timer()
+	local timer = vim.uv.new_timer()
+	if not timer then return end
+	refresh_timer = timer
 	refresh_timer:start(0, REFRESH_MS, vim.schedule_wrap(refresh))
 end
 
