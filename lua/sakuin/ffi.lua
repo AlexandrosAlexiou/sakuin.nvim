@@ -129,7 +129,15 @@ local function status_to_err(status)
 	return msg
 end
 
---- Convert a CSearchMessage pointer to Lua-friendly data and free it.
+---@class SakuinSearchMsg
+---@field msg_type "batch"|"done"|"error"
+---@field generation number
+---@field results table|nil
+---@field error string|nil
+---@field total number|nil
+
+--- Convert a CSearchMessage pointer to a Lua table and free it.
+---@return SakuinSearchMsg
 local function decode_search_message(ptr)
 	local msg_type = tonumber(ptr.msg_type)
 	local generation = tonumber(ptr.generation)
@@ -149,15 +157,15 @@ local function decode_search_message(ptr)
 		end
 		local total = tonumber(ptr.total)
 		get_lib().sakuin_free_search_message(ptr)
-		return "batch", generation, results, total
+		return { msg_type = "batch", generation = generation, results = results, total = total }
 	elseif msg_type == 1 then -- Done
 		local total = tonumber(ptr.total)
 		get_lib().sakuin_free_search_message(ptr)
-		return "done", generation, nil, total
+		return { msg_type = "done", generation = generation, total = total }
 	else -- Error
 		local err = ptr.error ~= nil and ffi.string(ptr.error) or "unknown error"
 		get_lib().sakuin_free_search_message(ptr)
-		return "error", generation, err, nil
+		return { msg_type = "error", generation = generation, error = err }
 	end
 end
 
@@ -198,19 +206,17 @@ local function on_async_notification()
 		local raw = lib.sakuin_search_take_result()
 		if raw == nil then break end
 
-		local msg_type, generation, data, total = decode_search_message(raw)
-		local callback = search_callbacks[generation]
+		local msg = decode_search_message(raw)
+		local callback = search_callbacks[msg.generation]
 		if callback then
-			if msg_type == "batch" then
-				---@cast data table
-				callback("batch", data, nil, total)
-			elseif msg_type == "done" then
-				search_callbacks[generation] = nil
-				callback("done", nil, nil, total)
-			elseif msg_type == "error" then
-				search_callbacks[generation] = nil
-				---@cast data string
-				callback("error", nil, data, nil)
+			if msg.msg_type == "batch" then
+				callback("batch", msg.results, nil, msg.total)
+			elseif msg.msg_type == "done" then
+				search_callbacks[msg.generation] = nil
+				callback("done", nil, nil, msg.total)
+			elseif msg.msg_type == "error" then
+				search_callbacks[msg.generation] = nil
+				callback("error", nil, msg.error, nil)
 			end
 		end
 	end
