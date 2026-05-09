@@ -4,7 +4,7 @@
 local M = {}
 
 local log_bufnr = nil ---@type number|nil
-local refresh_timer = nil ---@type vim.uv.Timer|nil
+local refresh_timer = nil ---@type uv.uv_timer_t|nil
 
 local REFRESH_MS = 1000
 
