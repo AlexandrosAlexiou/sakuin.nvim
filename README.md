@@ -100,7 +100,7 @@ require("sakuin").setup({
 | `:SakuinCword` | Search word under cursor or visual selection |
 | `:SakuinBuild` | Full index rebuild |
 | `:SakuinClean`      | Stop engine and wipe index                                          |
-| `:SakuinUpdate` | Incremental index update |
+| `:SakuinSync` | Incremental index sync |
 | `:SakuinStats` | Show index statistics |
 | `:SakuinLogs [level]` | Open log viewer (optionally set log level, e.g. `:SakuinLogs debug`) |
 

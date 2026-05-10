@@ -56,8 +56,8 @@ vim.api.nvim_create_user_command("SakuinClean", function() require("sakuin").cle
 	desc = "Delete the index for the current working directory",
 })
 
-vim.api.nvim_create_user_command("SakuinUpdate", function() require("sakuin").async_index("update") end, {
-	desc = "Incremental index update (async with progress)",
+vim.api.nvim_create_user_command("SakuinSync", function() require("sakuin").async_index("update") end, {
+	desc = "Incremental index sync (async with progress)",
 })
 
 vim.api.nvim_create_user_command("SakuinStats", function()
