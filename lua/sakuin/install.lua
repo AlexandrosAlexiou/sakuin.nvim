@@ -43,6 +43,8 @@ local build_in_progress = false
 ---@type fun(ok: boolean)[]
 local build_pending = {}
 
+local BUILD_NOTIFY_ID = "sakuin-build"
+
 local download_in_progress = false
 ---@type fun(ok: boolean)[]
 local download_pending = {}
@@ -63,8 +65,29 @@ local function build_async(on_done)
 	local log_path = root .. "/build/build.log"
 	vim.fn.mkdir(root .. "/build", "p")
 	local log = io.open(log_path, "w")
+
+	local pending = ""
 	local function on_chunk(_, data)
-		if log and data then log:write(data) end
+		if not data then return end
+		if log then log:write(data) end
+
+		pending = pending .. data
+		if not pending:find("\n", 1, true) then return end
+
+		local lines = vim.split(pending, "\n", { plain = true })
+		pending = lines[#lines]
+
+		local latest
+		for i = #lines - 1, 1, -1 do
+			local trimmed = lines[i]:gsub("\r", ""):match("^%s*(.-)%s*$")
+			if trimmed ~= "" then
+				latest = trimmed
+				break
+			end
+		end
+		if not latest then return end
+
+		vim.schedule(function() vim.api.nvim_echo({ { "[sakuin] " .. latest, "MoreMsg" } }, false, {}) end)
 	end
 
 	local cmd
@@ -117,14 +140,18 @@ local function start_or_join_build(on_ready)
 	end
 	build_in_progress = true
 
-	vim.notify("Building from source (this may take a few minutes)…", vim.log.levels.INFO, { title = "sakuin" })
+	vim.notify("Building from source…", vim.log.levels.INFO, { id = BUILD_NOTIFY_ID, title = "sakuin" })
 
 	build_async(function(ok, err)
 		build_in_progress = false
 		if ok then
-			vim.notify("Built from source successfully.", vim.log.levels.INFO, { title = "sakuin" })
+			vim.notify("Built from source successfully.", vim.log.levels.INFO, { id = BUILD_NOTIFY_ID, title = "sakuin" })
 		else
-			vim.notify("Build from source failed: " .. (err or "unknown"), vim.log.levels.ERROR, { title = "sakuin" })
+			vim.notify(
+				"Build from source failed: " .. (err or "unknown"),
+				vim.log.levels.ERROR,
+				{ id = BUILD_NOTIFY_ID, title = "sakuin" }
+			)
 		end
 		local waiters = build_pending
 		build_pending = {}
@@ -177,13 +204,10 @@ function M.ensure_binary(opts, on_ready)
 
 			vim.notify("Prebuilt download failed: " .. (dl_err or "unknown"), vim.log.levels.WARN, { title = "sakuin" })
 
-			-- Give one scheduler tick to render the WARN before the next notify.
-			vim.schedule(function()
-				start_or_join_build(on_ready)
-				for _, callback in ipairs(waiters) do
-					start_or_join_build(callback)
-				end
-			end)
+			start_or_join_build(on_ready)
+			for _, callback in ipairs(waiters) do
+				start_or_join_build(callback)
+			end
 		end)
 	)
 end
