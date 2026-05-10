@@ -129,8 +129,8 @@ local function start_or_join_build(on_ready)
 		local waiters = build_pending
 		build_pending = {}
 		on_ready(ok)
-		for _, cb in ipairs(waiters) do
-			cb(ok)
+		for _, callback in ipairs(waiters) do
+			callback(ok)
 		end
 	end)
 end
@@ -169,19 +169,19 @@ function M.ensure_binary(opts, on_ready)
 			if dl_ok then
 				vim.notify("Prebuilt binary installed.", vim.log.levels.INFO, { title = "sakuin" })
 				on_ready(true)
-				for _, cb in ipairs(waiters) do
-					cb(true)
+				for _, callback in ipairs(waiters) do
+					callback(true)
 				end
 				return
 			end
 
 			vim.notify("Prebuilt download failed: " .. (dl_err or "unknown"), vim.log.levels.WARN, { title = "sakuin" })
 
-			-- Give snacks one scheduler tick to render the WARN before the next notify.
+			-- Give one scheduler tick to render the WARN before the next notify.
 			vim.schedule(function()
 				start_or_join_build(on_ready)
-				for _, cb in ipairs(waiters) do
-					start_or_join_build(cb)
+				for _, callback in ipairs(waiters) do
+					start_or_join_build(callback)
 				end
 			end)
 		end)
