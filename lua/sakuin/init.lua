@@ -136,7 +136,31 @@ local function deferred_startup(config)
 	end)
 end
 
----@param opts? table
+---@class sakuin.Config.Search
+---@field limit? integer Max total results (0 = unlimited)
+
+---@class sakuin.Config.Progress
+---@field enabled? boolean
+
+---@class sakuin.Config.Keymaps
+---@field search? string|false Open search picker
+---@field search_cword? string|false Search word under cursor / visual selection
+---@field rebuild? string|false Full index rebuild
+
+---@class sakuin.Config
+---@field update_on_start? boolean Run incremental index update on startup
+---@field watch? boolean Watch filesystem for live index updates
+---@field max_file_size? integer Max file size to index, in bytes
+---@field ignore_patterns? string[] Patterns to ignore (on top of .gitignore)
+---@field include_extensions? string[] File extensions to index (nil = all text files detected by content)
+---@field respect_gitignore? boolean Respect .gitignore / .ignore files
+---@field log_level? "error"|"warn"|"info"|"debug"|"trace"|"off"
+---@field log_file? string Path to the log file
+---@field search? sakuin.Config.Search
+---@field progress? sakuin.Config.Progress
+---@field keymaps? sakuin.Config.Keymaps|false Set to false to disable all keymaps
+
+---@param opts? sakuin.Config
 function M.setup(opts)
 	local config = require("sakuin.config").apply(opts or {})
 
