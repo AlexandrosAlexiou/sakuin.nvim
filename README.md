@@ -18,9 +18,13 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 ```lua
 {
   "AlexandrosAlexiou/sakuin.nvim",
-  build = function() require("sakuin.install").ensure_binary() end,
+  build = function()
+    require("sakuin.install").ensure_binary()
+  end,
   dependencies = { "folke/snacks.nvim" },
-  opts = {},
+  config = function()
+    require("sakuin").setup {}
+  end,
 }
 ```
 
