@@ -77,15 +77,22 @@ fn snapshot() -> Result<StateSnapshot, String> {
     })
 }
 
-fn emit_progress(total: u64, done: u64, message: Option<&'static str>) {
+fn emit_progress(total: u64, done: u64, message: Option<&str>) {
     *indexing_event_slot().lock() = Some(IndexingEvent {
         total,
         done,
         status: "progress",
         error: None,
-        message,
+        message: message.map(String::from),
     });
     notify_main_thread();
+}
+
+fn search_executor() -> Executor {
+    let n = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    Executor::multi_thread(n, "sakuin-search-").unwrap_or_else(|_| Executor::single_thread())
 }
 
 fn commit_and_reload(writer: &Mutex<IndexWriter>, reader: &IndexReader) -> Result<(), String> {
@@ -347,11 +354,7 @@ where
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
     let cancelled = Arc::new(AtomicBool::new(false));
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
-        .unwrap_or_else(|_| Executor::single_thread());
+    let executor = search_executor();
     let params = search::SearchParams {
         reader: &state.reader,
         schema: &state.schema,
@@ -363,34 +366,19 @@ where
     search::search_streaming(&params, usize::MAX, on_batch)
 }
 
-// ============================================================================
-// Persistent search worker with streaming batches + uv_async notification
-// ============================================================================
+// Persistent search worker. The worker thread pushes batches/terminals onto
+// SEARCH_RESULT_QUEUE and calls uv_async_send to wake the Neovim event loop;
+// the registered callback then drains the queue on the main thread.
 //
-// Architecture (streaming, like ripgrep + snacks.nvim):
-//   1. Lua creates a `vim.uv.new_async(callback)` handle and passes the raw
-//      `uv_async_t*` pointer + the address of `uv_async_send` to Rust via
-//      `register_async_notifier()`.
-//   2. The worker executes `search_streaming()` which calls `on_batch` for
-//      each batch of results. The on_batch closure serializes the batch to
-//      JSON, pushes a `SearchResultMessage::Batch` to the queue, and calls
-//      `uv_async_send(handle)` to wake the Neovim event loop.
-//   3. When the search completes, the worker pushes a terminal `Done` or
-//      `Error` message and sends a final wake-up.
-//   4. The uv_async callback runs on the **main Neovim thread**. It drains
-//      the queue via `search_take_result()`, checks generation staleness,
-//      and feeds batches to the picker incrementally.
-//
-// `uv_async_send` is the ONLY libuv function that is safe to call from any
-// thread. This avoids the SEGV caused by calling a LuaJIT `ffi.cast` callback
-// from a non-Lua thread.
+// uv_async_send is the only libuv function safe to call off-thread — going
+// through a LuaJIT ffi.cast callback from a non-Lua thread SEGVs.
 
 pub struct IndexingEvent {
     pub status: &'static str,
     pub total: u64,
     pub done: u64,
     pub error: Option<String>,
-    pub message: Option<&'static str>,
+    pub message: Option<String>,
 }
 
 static INDEXING_EVENT: OnceLock<Mutex<Option<IndexingEvent>>> = OnceLock::new();
@@ -526,11 +514,7 @@ fn notify_main_thread() {
 
 /// The main loop of the persistent search worker thread.
 fn worker_loop(rx: std::sync::mpsc::Receiver<SearchRequest>, cancel_flag: Arc<AtomicBool>) {
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    let executor = Executor::multi_thread(num_threads, "sakuin-search-")
-        .unwrap_or_else(|_| Executor::single_thread());
+    let executor = search_executor();
 
     loop {
         let request = match rx.recv() {

@@ -210,7 +210,7 @@ impl CIndexingEvent {
             total: ev.total,
             done: ev.done,
             error: ev.error.map_or(std::ptr::null(), |e| str_to_c(&e)),
-            message: ev.message.map_or(std::ptr::null(), str_to_c),
+            message: ev.message.map_or(std::ptr::null(), |m| str_to_c(&m)),
         }
     }
 }
