@@ -119,12 +119,29 @@ fn process_events(
         paths_to_reindex.retain(|p| !p.starts_with(index_dir));
         paths_to_remove.retain(|p| !p.starts_with(index_dir));
 
-        if git_sentinel_changed {
+        handle_file_events(paths_to_reindex, paths_to_remove);
+        if git_sentinel_changed && git::current_head_oid(project_root) != last_head_oid {
             handle_git_operation(project_root, &mut last_head_oid);
-        } else {
-            handle_file_events(paths_to_reindex, paths_to_remove);
         }
     }
+}
+
+fn is_editor_temp(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if matches!(name, "4913" | "5036" | "5159") {
+        return true;
+    }
+    if name.ends_with('~') {
+        return true;
+    }
+    if name.starts_with('.')
+        && (name.ends_with(".swp") || name.ends_with(".swo") || name.ends_with(".swn"))
+    {
+        return true;
+    }
+    false
 }
 
 /// Classify a single filesystem event into reindex/remove/git-sentinel buckets.
@@ -146,6 +163,10 @@ fn classify_event(
 
         // Skip all other .git/ internal files.
         if git::is_git_internal_path(path) {
+            continue;
+        }
+
+        if is_editor_temp(path) {
             continue;
         }
 
@@ -205,22 +226,26 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
     }
 }
 
-/// Handle normal (non-git) file events.
 fn handle_file_events(
     mut paths_to_reindex: std::collections::HashSet<PathBuf>,
     paths_to_remove: std::collections::HashSet<PathBuf>,
 ) {
-    for p in &paths_to_remove {
-        paths_to_reindex.remove(p);
+    paths_to_reindex.extend(paths_to_remove);
+    let mut to_reindex = Vec::new();
+    let mut to_remove = Vec::new();
+    for p in paths_to_reindex {
+        if p.is_file() {
+            to_reindex.push(p);
+        } else {
+            to_remove.push(p);
+        }
     }
-    let to_remove: Vec<PathBuf> = paths_to_remove.into_iter().collect();
-    let to_reindex: Vec<PathBuf> = paths_to_reindex.into_iter().collect();
 
     if !to_remove.is_empty() || !to_reindex.is_empty() {
-        log::debug!(
-            "Watcher: batching {} removes + {} reindexes into one commit",
+        log::info!(
+            "Watcher: {} reindex, {} remove",
+            to_reindex.len(),
             to_remove.len(),
-            to_reindex.len()
         );
         if let Err(e) = crate::state::batch_update_files(&to_remove, &to_reindex) {
             log::warn!("Watcher: batch update failed: {}", e);
