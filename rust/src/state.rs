@@ -57,6 +57,92 @@ fn global_state() -> &'static Mutex<Option<SakuinState>> {
     STATE.get_or_init(|| Mutex::new(None))
 }
 
+struct StateSnapshot {
+    project_root: PathBuf,
+    schema: Schema,
+    writer: Arc<Mutex<IndexWriter>>,
+    config: SakuinConfig,
+    reader: IndexReader,
+}
+
+fn snapshot() -> Result<StateSnapshot, String> {
+    let guard = global_state().lock();
+    let state = guard.as_ref().ok_or("sakuin not initialized")?;
+    Ok(StateSnapshot {
+        project_root: state.project_root.clone(),
+        schema: state.schema.clone(),
+        writer: Arc::clone(&state.writer),
+        config: state.config.clone(),
+        reader: state.reader.clone(),
+    })
+}
+
+fn emit_progress(total: u64, done: u64, message: Option<&'static str>) {
+    *indexing_event_slot().lock() = Some(IndexingEvent {
+        total,
+        done,
+        status: "progress",
+        error: None,
+        message,
+    });
+    notify_main_thread();
+}
+
+fn commit_and_reload(writer: &Mutex<IndexWriter>, reader: &IndexReader) -> Result<(), String> {
+    writer
+        .lock()
+        .commit()
+        .map_err(|e| format!("Failed to commit: {}", e))?;
+    if let Err(e) = reader.reload() {
+        log::warn!("Reader reload after commit failed: {}", e);
+    }
+    Ok(())
+}
+
+/// Shared rayon indexing loop. Reads each file, briefly locks the writer to
+/// add the doc, emits a progress event every 100 files, and bails on
+/// CANCEL_INDEXING. `on_indexed(is_update)` is called for each success so
+/// callers can split add/update counters.
+fn run_index_job<F>(
+    project_root: &std::path::Path,
+    schema: &Schema,
+    writer: &Mutex<IndexWriter>,
+    files: &[(PathBuf, bool)],
+    on_indexed: F,
+) where
+    F: Fn(bool) + Sync,
+{
+    let prog = progress();
+    let done_counter = AtomicU64::new(0);
+    files.par_iter().for_each(|(file_path, is_update)| {
+        if CANCEL_INDEXING.load(Ordering::Relaxed) {
+            return;
+        }
+        let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        prog.done.store(count, Ordering::Relaxed);
+        if count.is_multiple_of(100) {
+            emit_progress(prog.total.load(Ordering::Relaxed), count, None);
+        }
+        match index::prepare_doc(project_root, file_path) {
+            Ok(doc) => {
+                let w = writer.lock();
+                match index::add_prepared_doc(&w, schema, doc) {
+                    Ok(()) => on_indexed(*is_update),
+                    Err(e) => log::warn!("Failed to index {:?}: {}", file_path, e),
+                }
+            }
+            Err(e) => log::warn!("Failed to read {:?}: {}", file_path, e),
+        }
+    });
+}
+
+fn rel_path(project_root: &std::path::Path, path: &std::path::Path) -> String {
+    path.strip_prefix(project_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Must be called before any other operation.
 pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> Result<(), String> {
     let project_root = PathBuf::from(project_root);
@@ -123,282 +209,130 @@ pub fn shutdown() {
     }
 }
 
+fn begin_indexing() {
+    CANCEL_INDEXING.store(false, Ordering::SeqCst);
+    let prog = progress();
+    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
+    prog.done.store(0, Ordering::SeqCst);
+    prog.total.store(0, Ordering::SeqCst);
+}
+
 /// Rayon tasks read files AND call add_document directly with a brief
 /// per-call lock on the IndexWriter. add_document is just a crossbeam
 /// channel send (~100ns) so contention is negligible.
 pub fn build_index() -> Result<u64, String> {
-    CANCEL_INDEXING.store(false, Ordering::SeqCst);
+    begin_indexing();
+    let s = snapshot()?;
 
-    let prog = progress();
-    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
-    prog.done.store(0, Ordering::SeqCst);
-    prog.total.store(0, Ordering::SeqCst);
+    let files = walker::walk_project(&s.project_root, &s.config);
+    let total = files.len() as u64;
+    progress().total.store(total, Ordering::SeqCst);
+    emit_progress(total, 0, None);
 
-    let (project_root, schema, writer, config, reader) = {
-        let guard = global_state().lock();
-        let state = guard.as_ref().ok_or("sakuin not initialized")?;
-        (
-            state.project_root.clone(),
-            state.schema.clone(),
-            Arc::clone(&state.writer),
-            state.config.clone(),
-            state.reader.clone(),
-        )
-    };
+    s.writer
+        .lock()
+        .delete_all_documents()
+        .map_err(|e| format!("Failed to clear index: {}", e))?;
 
-    let files = walker::walk_project(&project_root, &config);
-    let total_files = files.len() as u64;
-    prog.total.store(total_files, Ordering::SeqCst);
-    *indexing_event_slot().lock() = Some(IndexingEvent {
-        total: total_files,
-        done: 0,
-        status: "progress",
-        error: None,
-        message: None,
-    });
-    notify_main_thread();
-
-    {
-        let writer_guard = writer.lock();
-        writer_guard
-            .delete_all_documents()
-            .map_err(|e| format!("Failed to clear index: {}", e))?;
-    }
-
-    let indexed_count = Arc::new(AtomicU64::new(0));
-    let error_count = Arc::new(AtomicU64::new(0));
-    let done_counter = Arc::new(AtomicU64::new(0));
-
-    files.par_iter().for_each(|file_path| {
-        if CANCEL_INDEXING.load(Ordering::Relaxed) {
-            return;
-        }
-        let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        prog.done.store(count, Ordering::Relaxed);
-        if count.is_multiple_of(100) {
-            let total = prog.total.load(Ordering::Relaxed);
-            *indexing_event_slot().lock() = Some(IndexingEvent {
-                total,
-                done: count,
-                status: "progress",
-                error: None,
-                message: None,
-            });
-            notify_main_thread();
-        }
-        match index::prepare_doc(&project_root, file_path) {
-            Ok(doc) => {
-                let writer_guard = writer.lock();
-                match index::add_prepared_doc(&writer_guard, &schema, doc) {
-                    Ok(()) => {
-                        indexed_count.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to index: {}", e);
-                        error_count.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to read {:?}: {}", file_path, e);
-                error_count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+    let indexed = AtomicU64::new(0);
+    let files: Vec<(PathBuf, bool)> = files.into_iter().map(|p| (p, false)).collect();
+    run_index_job(&s.project_root, &s.schema, &s.writer, &files, |_| {
+        indexed.fetch_add(1, Ordering::Relaxed);
     });
 
-    let indexed_count = indexed_count.load(Ordering::Relaxed);
-    let error_count = error_count.load(Ordering::Relaxed);
+    commit_and_reload(&s.writer, &s.reader)?;
+    progress().status.store(PROGRESS_DONE, Ordering::SeqCst);
 
-    {
-        let mut writer_guard = writer.lock();
-        writer_guard
-            .commit()
-            .map_err(|e| format!("Failed to commit: {}", e))?;
-    }
-    let _ = reader.reload();
-
-    prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
-
-    log::info!(
-        "Full index build complete: {} files indexed, {} errors",
-        indexed_count,
-        error_count
-    );
-
-    Ok(indexed_count)
+    let indexed = indexed.load(Ordering::Relaxed);
+    log::info!("Full index build complete: {} files indexed", indexed);
+    Ok(indexed)
 }
 
 pub fn update_index() -> Result<(u64, u64, u64), String> {
-    CANCEL_INDEXING.store(false, Ordering::SeqCst);
+    begin_indexing();
+    emit_progress(0, 0, Some("scanning files…"));
 
-    let prog = progress();
-    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
-    prog.done.store(0, Ordering::SeqCst);
-    prog.total.store(0, Ordering::SeqCst);
+    let s = snapshot()?;
+    let files_on_disk = walker::walk_project(&s.project_root, &s.config);
 
-    *indexing_event_slot().lock() = Some(IndexingEvent {
-        total: 0,
-        done: 0,
-        status: "progress",
-        error: None,
-        message: Some("scanning files…"),
-    });
-    notify_main_thread();
-
-    let (project_root, schema, writer, config, reader) = {
-        let guard = global_state().lock();
-        let state = guard.as_ref().ok_or("sakuin not initialized")?;
-        (
-            state.project_root.clone(),
-            state.schema.clone(),
-            Arc::clone(&state.writer),
-            state.config.clone(),
-            state.reader.clone(),
-        )
-    };
-
-    let files_on_disk = walker::walk_project(&project_root, &config);
-
-    *indexing_event_slot().lock() = Some(IndexingEvent {
-        total: 0,
-        done: 0,
-        status: "progress",
-        error: None,
-        message: Some("checking index…"),
-    });
-    notify_main_thread();
-    let indexed_mtimes = index::all_indexed_mtimes(&reader, &schema);
+    emit_progress(0, 0, Some("checking index…"));
+    let indexed_mtimes = index::all_indexed_mtimes(&s.reader, &s.schema);
 
     let disk_set: HashSet<String> = files_on_disk
         .iter()
-        .filter_map(|p| {
-            p.strip_prefix(&project_root)
-                .ok()
-                .map(|r| r.to_string_lossy().to_string())
-        })
+        .filter_map(|p| p.strip_prefix(&s.project_root).ok())
+        .map(|r| r.to_string_lossy().to_string())
         .collect();
 
     let mut removed: u64 = 0;
     {
-        let writer_guard = writer.lock();
+        let w = s.writer.lock();
         for indexed_path in indexed_mtimes.keys() {
             if !disk_set.contains(indexed_path) {
-                index::delete_by_path(&writer_guard, &schema, indexed_path);
+                index::delete_by_path(&w, &s.schema, indexed_path);
                 removed += 1;
             }
         }
     }
 
     let files_to_index: Vec<(PathBuf, bool)> = files_on_disk
-        .iter()
+        .into_iter()
         .filter_map(|file_path| {
-            let rel_path = file_path
-                .strip_prefix(&project_root)
-                .unwrap_or(file_path)
-                .to_string_lossy()
-                .to_string();
-
-            let disk_mtime = std::fs::metadata(file_path)
+            let rel = rel_path(&s.project_root, &file_path);
+            let disk_mtime = std::fs::metadata(&file_path)
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-
-            match indexed_mtimes.get(&rel_path) {
-                None => Some((file_path.clone(), false)), // new file
-                Some(&stored) if disk_mtime != stored => Some((file_path.clone(), true)), // changed
-                _ => None,                                // unchanged
+            match indexed_mtimes.get(&rel) {
+                None => Some((file_path, false)),
+                Some(&stored) if disk_mtime != stored => Some((file_path, true)),
+                _ => None,
             }
         })
         .collect();
 
-    let total_to_index = files_to_index.len() as u64;
-    prog.total.store(total_to_index, Ordering::SeqCst);
-    *indexing_event_slot().lock() = Some(IndexingEvent {
-        total: total_to_index,
-        done: 0,
-        status: "progress",
-        error: None,
-        message: None,
-    });
-    notify_main_thread();
+    let total = files_to_index.len() as u64;
+    progress().total.store(total, Ordering::SeqCst);
+    emit_progress(total, 0, None);
 
     {
-        let writer_guard = writer.lock();
-        for (file_path, is_update) in &files_to_index {
+        let w = s.writer.lock();
+        for (path, is_update) in &files_to_index {
             if *is_update {
-                let rel_path = file_path
-                    .strip_prefix(&project_root)
-                    .unwrap_or(file_path)
-                    .to_string_lossy()
-                    .to_string();
-                index::delete_by_path(&writer_guard, &schema, &rel_path);
+                index::delete_by_path(&w, &s.schema, &rel_path(&s.project_root, path));
             }
         }
     }
 
-    let added = Arc::new(AtomicU64::new(0));
-    let updated = Arc::new(AtomicU64::new(0));
-    let done_counter = Arc::new(AtomicU64::new(0));
+    let added = AtomicU64::new(0);
+    let updated = AtomicU64::new(0);
+    run_index_job(
+        &s.project_root,
+        &s.schema,
+        &s.writer,
+        &files_to_index,
+        |is_update| {
+            if is_update {
+                updated.fetch_add(1, Ordering::Relaxed);
+            } else {
+                added.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+    );
 
-    files_to_index
-        .par_iter()
-        .for_each(|(file_path, is_update)| {
-            if CANCEL_INDEXING.load(Ordering::Relaxed) {
-                return;
-            }
-            let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
-            prog.done.store(count, Ordering::Relaxed);
-            if count.is_multiple_of(100) {
-                let total = prog.total.load(Ordering::Relaxed);
-                *indexing_event_slot().lock() = Some(IndexingEvent {
-                    total,
-                    done: count,
-                    status: "progress",
-                    error: None,
-                    message: None,
-                });
-                notify_main_thread();
-            }
-            match index::prepare_doc(&project_root, file_path) {
-                Ok(doc) => {
-                    let writer_guard = writer.lock();
-                    match index::add_prepared_doc(&writer_guard, &schema, doc) {
-                        Ok(()) => {
-                            if *is_update {
-                                updated.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                added.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-                        Err(e) => log::warn!("Failed to index: {}", e),
-                    }
-                }
-                Err(e) => log::warn!("Failed to read file: {}", e),
-            }
-        });
+    commit_and_reload(&s.writer, &s.reader)?;
+    progress().status.store(PROGRESS_DONE, Ordering::SeqCst);
 
     let added = added.load(Ordering::Relaxed);
     let updated = updated.load(Ordering::Relaxed);
-
-    {
-        let mut writer_guard = writer.lock();
-        writer_guard
-            .commit()
-            .map_err(|e| format!("Failed to commit: {}", e))?;
-    }
-    let _ = reader.reload();
-
-    prog.status.store(PROGRESS_DONE, Ordering::SeqCst);
-
     log::info!(
         "Incremental update: +{} added, ~{} updated, -{} removed",
         added,
         updated,
         removed
     );
-
     Ok((added, updated, removed))
 }
 
@@ -778,16 +712,11 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
-    let mut writer = state.writer.lock();
+    let writer = state.writer.lock();
     let mut changed = false;
 
     for path in to_remove {
-        let rel = path
-            .strip_prefix(&state.project_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
-        index::delete_by_path(&writer, &state.schema, &rel);
+        index::delete_by_path(&writer, &state.schema, &rel_path(&state.project_root, path));
         changed = true;
         log::debug!("Watcher: removed {:?}", path);
     }
@@ -796,13 +725,8 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
         if !path.is_file() {
             continue;
         }
-        let rel = path
-            .strip_prefix(&state.project_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
-        // Delete stale doc first (no-op if the file is new)
-        index::delete_by_path(&writer, &state.schema, &rel);
+        // Delete stale doc first (no-op if the file is new).
+        index::delete_by_path(&writer, &state.schema, &rel_path(&state.project_root, path));
         match index::index_file(&writer, &state.schema, &state.project_root, path) {
             Ok(()) => {
                 changed = true;
@@ -813,13 +737,8 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
     }
 
     if changed {
-        writer
-            .commit()
-            .map_err(|e| format!("Failed to commit: {}", e))?;
-        state
-            .reader
-            .reload()
-            .map_err(|e| format!("Failed to reload reader: {}", e))?;
+        drop(writer);
+        commit_and_reload(&state.writer, &state.reader)?;
     }
 
     Ok(())
