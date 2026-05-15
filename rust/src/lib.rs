@@ -16,14 +16,9 @@ use std::os::raw::{c_char, c_void};
 mod ffi_exports {
     use super::*;
 
-    /// Initialize the sakuin engine.
-    ///
-    /// - `project_root`: absolute path to the project directory (e.g., `vim.fn.getcwd()`)
-    /// - `index_dir`: absolute path to the index directory (e.g., `{project_root}/.sakuin`)
-    /// - `config_json`: JSON-serialized `SakuinConfig` (may be NULL — uses defaults)
-    ///
-    /// On error, the returned `CStatus.err` is a heap-allocated message that the
-    /// caller frees with `sakuin_free_string`.
+    /// `config_json` may be NULL to use defaults. On error, the returned
+    /// `CStatus.err` is a heap-allocated message the caller frees with
+    /// `sakuin_free_string`.
     #[no_mangle]
     pub extern "C" fn sakuin_init(
         project_root: *const c_char,
@@ -42,7 +37,6 @@ mod ffi_exports {
         })
     }
 
-    /// Shut down the engine: stop watcher, stop worker, commit pending writes, free resources.
     #[no_mangle]
     pub extern "C" fn sakuin_shutdown() {
         state::shutdown();
@@ -100,7 +94,6 @@ mod ffi_exports {
         }
     }
 
-    /// Free an indexing event returned by `sakuin_indexing_take_event`.
     #[no_mangle]
     pub extern "C" fn sakuin_free_indexing_event(ptr: *mut ffi::CIndexingEvent) {
         if ptr.is_null() {
@@ -113,26 +106,19 @@ mod ffi_exports {
         }
     }
 
-    /// Start the background filesystem watcher.
     #[no_mangle]
     pub extern "C" fn sakuin_start_watcher() -> ffi::CStatus {
         ffi::ffi_try(state::start_watcher)
     }
 
-    /// Stop the background filesystem watcher.
     #[no_mangle]
     pub extern "C" fn sakuin_stop_watcher() {
         state::stop_watcher();
     }
 
-    /// Register the libuv async handle used to notify the main Neovim thread
-    /// when search results are ready.
-    ///
-    /// - `handle_ptr`: raw `uv_async_t*` pointer from `vim.uv.new_async()`
-    /// - `send_fn_ptr`: address of `uv_async_send` (the only libuv function
-    ///   that is safe to call from any thread)
-    ///
-    /// Must be called once before any `sakuin_search_submit` calls.
+    /// Register the libuv async handle (raw `uv_async_t*`) and the address of
+    /// `uv_async_send` — the only libuv function safe to call off-thread.
+    /// Must be called once before `sakuin_search_submit`.
     #[no_mangle]
     pub extern "C" fn sakuin_register_async_notifier(
         handle_ptr: *mut c_void,
@@ -150,7 +136,6 @@ mod ffi_exports {
         }
     }
 
-    /// Free a search message returned by `sakuin_search_take_result`.
     #[no_mangle]
     pub extern "C" fn sakuin_free_search_message(ptr: *mut ffi::CSearchMessage) {
         if ptr.is_null() {
@@ -158,9 +143,7 @@ mod ffi_exports {
         }
         unsafe {
             let msg = Box::from_raw(ptr);
-            // Free error string if present
             ffi::free_c_string(msg.error);
-            // Free results array and its strings
             if !msg.results.is_null() && msg.results_len > 0 {
                 let results = Vec::from_raw_parts(
                     msg.results,
@@ -175,15 +158,9 @@ mod ffi_exports {
         }
     }
 
-    /// Submit a search query to the persistent worker thread.
-    ///
-    /// - `query`: the search query string
-    /// - `generation`: a monotonically-increasing counter from the Lua side.
-    ///   The same value is echoed back in result messages so the Lua side can
-    ///   discard stale results.
-    /// - `limit`: maximum total results (0 = unlimited)
-    ///
-    /// Any in-flight search is automatically cancelled.
+    /// `generation` is echoed back in result messages so the Lua side can
+    /// discard stale batches. `limit = 0` means unlimited. Any in-flight
+    /// search is automatically cancelled.
     #[no_mangle]
     pub extern "C" fn sakuin_search_submit(
         query: *const c_char,
@@ -201,45 +178,30 @@ mod ffi_exports {
         })
     }
 
-    /// Cancel any in-flight search on the worker thread.
     #[no_mangle]
     pub extern "C" fn sakuin_search_cancel() {
         state::search_cancel();
     }
 
-    /// Get index statistics as a C struct.
-    ///
-    /// On success, writes the heap-allocated stats pointer to `*out` (caller
-    /// frees with `sakuin_free_stats`) and returns an OK `CStatus`. On error,
-    /// `*out` is set to NULL and the returned status carries the message.
+    /// On success, writes a heap-allocated stats pointer to `*out` (caller
+    /// frees with `sakuin_free_stats`). On error, leaves `*out` as NULL and
+    /// returns the message in `CStatus`.
     #[no_mangle]
     pub extern "C" fn sakuin_stats(out: *mut *mut ffi::CIndexStats) -> ffi::CStatus {
-        if !out.is_null() {
-            unsafe {
-                *out = std::ptr::null_mut();
-            }
+        if out.is_null() {
+            return ffi::CStatus::err("sakuin_stats: out pointer is null");
         }
+        unsafe { *out = std::ptr::null_mut() };
         match state::stats() {
             Ok(stats) => {
                 let ptr = Box::into_raw(Box::new(ffi::CIndexStats::from_internal(stats)));
-                if out.is_null() {
-                    // Caller didn't provide a slot; drop the allocation rather than leak.
-                    unsafe {
-                        let s = Box::from_raw(ptr);
-                        ffi::free_c_string(s.project_root);
-                    }
-                } else {
-                    unsafe {
-                        *out = ptr;
-                    }
-                }
+                unsafe { *out = ptr };
                 ffi::CStatus::ok()
             }
             Err(e) => ffi::CStatus::err(e),
         }
     }
 
-    /// Free a stats struct returned by `sakuin_stats`.
     #[no_mangle]
     pub extern "C" fn sakuin_free_stats(ptr: *mut ffi::CIndexStats) {
         if ptr.is_null() {
@@ -251,8 +213,6 @@ mod ffi_exports {
         }
     }
 
-    /// Free a string previously returned by any sakuin function.
-    ///
     /// Passing NULL is a no-op.
     #[no_mangle]
     pub extern "C" fn sakuin_free_string(ptr: *const c_char) {
@@ -261,9 +221,7 @@ mod ffi_exports {
         }
     }
 
-    /// Change the log level at runtime.
-    ///
-    /// `level`: one of "error", "warn", "info", "debug", "trace", "off".
+    /// `level`: "error", "warn", "info", "debug", "trace", or "off".
     #[no_mangle]
     pub extern "C" fn sakuin_set_log_level(level: *const c_char) -> ffi::CStatus {
         ffi::ffi_try(|| {
@@ -276,14 +234,12 @@ mod ffi_exports {
         })
     }
 
-    /// Clear the log file contents.
     #[no_mangle]
     pub extern "C" fn sakuin_clear_logs() {
         logging::clear();
     }
 }
 
-// Re-export FFI functions at crate root for integration tests.
 pub use ffi_exports::*;
 
 /// Internal API for the debug CLI binary and integration tests.

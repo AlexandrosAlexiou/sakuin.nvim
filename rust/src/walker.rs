@@ -9,13 +9,16 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
     let mut builder = WalkBuilder::new(project_root);
 
     let use_git = config.respect_gitignore;
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     builder
         .hidden(true) // always skip hidden files/dirs (e.g. .git/)
         .git_ignore(use_git)
         .git_global(use_git)
         .git_exclude(use_git)
         .ignore(use_git)
-        .threads(num_cpus());
+        .threads(threads);
 
     if !config.ignore_patterns.is_empty() {
         let mut overrides = ignore::overrides::OverrideBuilder::new(project_root);
@@ -75,12 +78,6 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
     });
 
     files.into_inner()
-}
-
-fn num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
 }
 
 static BINARY_EXTENSIONS: &[&str] = &[
