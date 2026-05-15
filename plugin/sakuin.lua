@@ -85,10 +85,14 @@ end, {
 })
 
 vim.api.nvim_create_user_command("SakuinLogs", function(opts)
-	local level = (opts.args and opts.args ~= "") and opts.args or nil
-	require("sakuin.logs").open({ level = level })
+	local arg = opts.args ~= "" and opts.args or nil
+	if arg == "clear" then
+		require("sakuin.logs").clear()
+	else
+		require("sakuin.logs").open({ level = arg })
+	end
 end, {
 	nargs = "?",
-	complete = function() return { "error", "warn", "info", "debug", "trace", "off" } end,
-	desc = "Open sakuin log viewer (optional: set log level, e.g. :SakuinLogs debug)",
+	complete = function() return { "error", "warn", "info", "debug", "trace", "off", "clear" } end,
+	desc = "Open sakuin log viewer (optional: set log level, e.g. :SakuinLogs debug; or :SakuinLogs clear)",
 })

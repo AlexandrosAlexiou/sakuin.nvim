@@ -5,6 +5,7 @@ local M = {}
 
 local log_bufnr = nil ---@type number|nil
 local refresh_timer = nil ---@type uv.uv_timer_t|nil
+local ns_id = vim.api.nvim_create_namespace("sakuin-logs")
 
 local REFRESH_MS = 1000
 
@@ -47,13 +48,13 @@ local function render(lines)
 	vim.api.nvim_buf_set_lines(log_bufnr, 0, -1, false, lines)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = log_bufnr })
 
-	vim.api.nvim_buf_clear_namespace(log_bufnr, -1, 0, -1)
+	vim.api.nvim_buf_clear_namespace(log_bufnr, ns_id, 0, -1)
 	for i, line in ipairs(lines) do
 		for level_str, hl_group in pairs(level_hl) do
 			-- Level appears after the timestamp: "2026-04-25 11:58:27.123 INFO  [..."
 			local col_start = line:find(level_str, 1, true)
 			if col_start then
-				vim.api.nvim_buf_set_extmark(log_bufnr, -1, i - 1, col_start - 1, {
+				vim.api.nvim_buf_set_extmark(log_bufnr, ns_id, i - 1, col_start - 1, {
 					end_col = col_start - 1 + #level_str,
 					hl_group = hl_group,
 				})
@@ -151,13 +152,7 @@ function M.open(opts)
 	local buf_opts = { buffer = log_bufnr, silent = true }
 	vim.keymap.set("n", "q", M.close, buf_opts)
 	vim.keymap.set("n", "R", refresh, buf_opts)
-	vim.keymap.set("n", "C", function()
-		local ok, ffi_mod = pcall(require, "sakuin.ffi")
-		if ok and ffi_mod.is_loaded() then
-			ffi_mod.clear_logs()
-			refresh()
-		end
-	end, buf_opts)
+	vim.keymap.set("n", "C", M.clear, buf_opts)
 
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		buffer = log_bufnr,
@@ -169,6 +164,14 @@ function M.open(opts)
 
 	start_timer()
 	refresh()
+end
+
+function M.clear()
+	local ok, ffi_mod = pcall(require, "sakuin.ffi")
+	if ok and ffi_mod.is_loaded() then
+		ffi_mod.clear_logs()
+		if log_bufnr and vim.api.nvim_buf_is_valid(log_bufnr) then refresh() end
+	end
 end
 
 function M.close()
