@@ -30,6 +30,42 @@ pub fn is_git_sentinel(path: &Path, project_root: &Path) -> bool {
     path == git_dir.join("index") || path == git_dir.join("HEAD")
 }
 
+fn collect_diff(
+    diff: &git2::Diff<'_>,
+    project_root: &Path,
+    changes: &mut GitChanges,
+) -> Result<(), String> {
+    diff.foreach(
+        &mut |delta, _| {
+            categorize_delta(&delta, project_root, changes);
+            true
+        },
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| format!("Failed to iterate diff: {}", e))
+}
+
+fn finalize(changes: &mut GitChanges, label: &str) {
+    changes.modified.sort();
+    changes.modified.dedup();
+    changes.deleted.sort();
+    changes.deleted.dedup();
+    log::info!(
+        "{}: {} modified/added, {} deleted",
+        label,
+        changes.modified.len(),
+        changes.deleted.len()
+    );
+    for p in &changes.modified {
+        log::debug!("  {} (modified/added): {:?}", label, p);
+    }
+    for p in &changes.deleted {
+        log::debug!("  {} (deleted): {:?}", label, p);
+    }
+}
+
 /// Open the git repository at `project_root` and compute the working-tree
 /// diff — i.e. what files differ between the current HEAD tree and the
 /// actual files on disk.
@@ -41,69 +77,31 @@ pub fn detect_changes(project_root: &Path) -> Result<GitChanges, String> {
     let repo = git2::Repository::open(project_root)
         .map_err(|e| format!("Failed to open git repo: {}", e))?;
 
-    let mut changes = GitChanges::default();
-
-    // Get the HEAD tree (if any — a fresh repo with no commits has no HEAD tree)
+    // HEAD tree is None on a fresh repo with no commits.
     let head_tree = repo.head().ok().and_then(|r| r.peel_to_tree().ok());
 
-    // Diff HEAD tree against the working directory.
     let mut diff_opts = git2::DiffOptions::new();
     diff_opts
         .include_untracked(true)
         .recurse_untracked_dirs(true);
 
-    let diff = repo
+    let mut changes = GitChanges::default();
+
+    let workdir_diff = repo
         .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_opts))
         .map_err(|e| format!("Failed to compute diff: {}", e))?;
+    collect_diff(&workdir_diff, project_root, &mut changes)?;
 
-    diff.foreach(
-        &mut |delta, _progress| {
-            categorize_delta(&delta, project_root, &mut changes);
-            true
-        },
-        None, // binary callback
-        None, // hunk callback
-        None, // line callback
-    )
-    .map_err(|e| format!("Failed to iterate diff: {}", e))?;
-
-    // Also diff the index (staging area) against HEAD to catch staged changes
-    // that affect the working tree after operations like stash pop.
+    // Also diff the index (staging area) against HEAD — captures staged
+    // changes that surface after stash pop, etc.
     let index_diff = repo
         .diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))
         .map_err(|e| format!("Failed to compute index diff: {}", e))?;
+    collect_diff(&index_diff, project_root, &mut changes)?;
 
-    index_diff
-        .foreach(
-            &mut |delta, _progress| {
-                categorize_delta(&delta, project_root, &mut changes);
-                true
-            },
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| format!("Failed to iterate index diff: {}", e))?;
-
-    // Deduplicate — a file might appear in both diffs
-    changes.modified.sort();
-    changes.modified.dedup();
-    changes.deleted.sort();
-    changes.deleted.dedup();
-    // If a file is in both modified and deleted, it was likely renamed;
-    // keep it in both lists (delete old, index new) — batch_update_files handles this.
-
-    log::info!(
-        "Git change detection: {} modified/added, {} deleted",
-        changes.modified.len(),
-        changes.deleted.len()
-    );
-    for p in &changes.modified {
-        log::debug!("  git changed (modified/added): {:?}", p);
-    }
-    for p in &changes.deleted {
-        log::debug!("  git changed (deleted): {:?}", p);
-    }
+    // A renamed file ends up in both lists (delete old, index new) — that's
+    // what batch_update_files expects.
+    finalize(&mut changes, "Git change detection");
 
     Ok(changes)
 }
@@ -178,34 +176,8 @@ pub fn detect_head_change(
         .map_err(|e| format!("Failed to diff trees: {}", e))?;
 
     let mut changes = GitChanges::default();
-
-    diff.foreach(
-        &mut |delta, _progress| {
-            categorize_delta(&delta, project_root, &mut changes);
-            true
-        },
-        None,
-        None,
-        None,
-    )
-    .map_err(|e| format!("Failed to iterate tree diff: {}", e))?;
-
-    changes.modified.sort();
-    changes.modified.dedup();
-    changes.deleted.sort();
-    changes.deleted.dedup();
-
-    log::info!(
-        "Git HEAD change detection: {} modified/added, {} deleted",
-        changes.modified.len(),
-        changes.deleted.len()
-    );
-    for p in &changes.modified {
-        log::debug!("  git HEAD changed (modified/added): {:?}", p);
-    }
-    for p in &changes.deleted {
-        log::debug!("  git HEAD changed (deleted): {:?}", p);
-    }
+    collect_diff(&diff, project_root, &mut changes)?;
+    finalize(&mut changes, "Git HEAD change detection");
 
     Ok(changes)
 }
