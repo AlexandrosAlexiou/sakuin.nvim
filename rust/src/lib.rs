@@ -48,74 +48,47 @@ mod ffi_exports {
         state::shutdown();
     }
 
-    /// Spawn a full index rebuild on a background thread.
-    ///
-    /// Returns immediately. Completion/error is pushed via `uv_async_send` →
-    /// `sakuin_indexing_take_event`. The returned `CStatus` only reports
-    /// whether the background job was successfully spawned; runtime failures
-    /// arrive as an error event on the indexing channel.
+    /// Run an indexing job on a background thread. Completion/error is pushed
+    /// via `uv_async_send` → `sakuin_indexing_take_event`.
+    fn spawn_indexing<F>(f: F)
+    where
+        F: FnOnce() -> Result<u64, String> + Send + 'static,
+    {
+        use std::sync::atomic::Ordering;
+        std::thread::spawn(move || {
+            let prog = state::progress();
+            match f() {
+                Ok(done) => state::push_indexing_event(state::IndexingEvent {
+                    status: "done",
+                    total: prog.total.load(Ordering::Relaxed),
+                    done,
+                    error: None,
+                    message: None,
+                }),
+                Err(e) => {
+                    prog.status.store(state::PROGRESS_ERROR, Ordering::SeqCst);
+                    state::push_indexing_event(state::IndexingEvent {
+                        status: "error",
+                        total: prog.total.load(Ordering::Relaxed),
+                        done: prog.done.load(Ordering::Relaxed),
+                        error: Some(e),
+                        message: None,
+                    });
+                }
+            }
+        });
+    }
+
     #[no_mangle]
     pub extern "C" fn sakuin_build_index_async() -> ffi::CStatus {
-        ffi::ffi_try(|| {
-            std::thread::spawn(|| {
-                let prog = state::progress();
-                match state::build_index() {
-                    Ok(count) => {
-                        state::push_indexing_event(state::IndexingEvent {
-                            status: "done",
-                            total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
-                            done: count,
-                            error: None,
-                            message: None,
-                        });
-                    }
-                    Err(e) => {
-                        prog.status
-                            .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
-                        state::push_indexing_event(state::IndexingEvent {
-                            status: "error",
-                            total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
-                            done: prog.done.load(std::sync::atomic::Ordering::Relaxed),
-                            error: Some(e),
-                            message: None,
-                        });
-                    }
-                }
-            });
-            Ok(())
-        })
+        spawn_indexing(state::build_index);
+        ffi::CStatus::ok()
     }
 
     #[no_mangle]
     pub extern "C" fn sakuin_update_index_async() -> ffi::CStatus {
-        ffi::ffi_try(|| {
-            std::thread::spawn(|| {
-                let prog = state::progress();
-                match state::update_index() {
-                    Ok((added, updated, removed)) => {
-                        state::push_indexing_event(state::IndexingEvent {
-                            status: "done",
-                            total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
-                            done: added + updated + removed,
-                            error: None,
-                            message: None,
-                        });
-                    }
-                    Err(e) => {
-                        prog.status
-                            .store(state::PROGRESS_ERROR, std::sync::atomic::Ordering::SeqCst);
-                        state::push_indexing_event(state::IndexingEvent {
-                            status: "error",
-                            total: prog.total.load(std::sync::atomic::Ordering::Relaxed),
-                            done: prog.done.load(std::sync::atomic::Ordering::Relaxed),
-                            error: Some(e),
-                            message: None,
-                        });
-                    }
-                }
-            });
-            Ok(())
-        })
+        spawn_indexing(|| state::update_index().map(|(a, u, r)| a + u + r));
+        ffi::CStatus::ok()
     }
 
     /// Returns NULL if no event is pending. Caller MUST free with `sakuin_free_indexing_event`.
