@@ -5,7 +5,7 @@ use std::io::{stdout, IsTerminal, Write};
 #[derive(Parser)]
 #[command(
     name = "sakuin-cli",
-    about = "sakuin debug CLI — build, update, search, stats"
+    about = "sakuin debug CLI — build, sync, search, stats"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -23,8 +23,8 @@ enum Command {
         index_dir: Option<String>,
     },
 
-    /// Incrementally update the index (re-index changed files, remove deleted ones).
-    Update {
+    /// Incrementally sync the index (re-index changed files, remove deleted ones).
+    Sync {
         root: String,
         #[arg(long)]
         index_dir: Option<String>,
@@ -94,7 +94,7 @@ fn main() {
             shutdown();
         }
 
-        Command::Update {
+        Command::Sync {
             root,
             index_dir: idx,
         } => {
@@ -104,7 +104,7 @@ fn main() {
                 Ok((added, updated, removed)) => {
                     println!("+{added} added  ~{updated} updated  -{removed} removed");
                 }
-                Err(e) => die(&format!("update: {e}")),
+                Err(e) => die(&format!("sync: {e}")),
             }
             shutdown();
         }
