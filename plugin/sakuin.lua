@@ -56,7 +56,12 @@ vim.api.nvim_create_user_command("SakuinClean", function() require("sakuin").cle
 	desc = "Delete the index for the current working directory",
 })
 
-vim.api.nvim_create_user_command("SakuinSync", function() require("sakuin").async_index("update") end, {
+vim.api.nvim_create_user_command("SakuinSync", function()
+	if vim.fn.isdirectory(vim.fn.getcwd() .. "/.sakuin") == 0 then
+		vim.notify("[sakuin] No index found. A full index will be built.", vim.log.levels.WARN)
+	end
+	require("sakuin").async_index("update")
+end, {
 	desc = "Incremental index sync (async with progress)",
 })
 
