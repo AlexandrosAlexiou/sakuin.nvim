@@ -1,6 +1,6 @@
 # sakuin-cli
 
-Debug CLI for the sakuin search engine. Lets you build, update, search, and inspect an index without opening Neovim.
+Debug CLI for the sakuin search engine. Lets you build, sync, search, and inspect an index without opening Neovim.
 
 ## Build
 
@@ -33,7 +33,7 @@ sakuin-cli <COMMAND>
 
 Commands:
   build   Build the full index for a project directory
-  update  Incrementally update the index (re-index changed files, remove deleted ones)
+  sync    Incrementally sync the index (re-index changed files, remove deleted ones)
   search  Search the index and print matching lines
   stats   Print index statistics
 ```
@@ -53,16 +53,16 @@ sakuin-cli build ~/myproject
 # Indexed 312 file(s) → ~/myproject/.sakuin
 ```
 
-### update
+### sync
 
 ```bash
-sakuin-cli update <root> [--index-dir <dir>]
+sakuin-cli sync <root> [--index-dir <dir>]
 ```
 
-Incremental update — re-indexes changed files and removes deleted ones.
+Incremental sync — re-indexes changed files and removes deleted ones.
 
 ```bash
-sakuin-cli update ~/myproject
+sakuin-cli sync ~/myproject
 # +3 added  ~1 updated  -0 removed
 ```
 
