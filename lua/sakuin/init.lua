@@ -6,8 +6,9 @@ end
 
 ---@param ffi_mod table
 ---@param label string
+---@param mode "build"|"update"
 ---@param on_done? fun()
-local function watch_indexing(ffi_mod, label, on_done)
+local function watch_indexing(ffi_mod, label, mode, on_done)
 	local progress = require("sakuin.progress")
 	local finished = false
 
@@ -21,8 +22,14 @@ local function watch_indexing(ffi_mod, label, on_done)
 		ffi_mod.set_indexing_callback(nil)
 
 		if event.status == "done" then
-			local stats = ffi_mod.stats()
-			local msg = stats and string.format("%d files indexed", stats.num_docs) or "complete"
+			local msg
+			if mode == "update" then
+				local n = event.done or 0
+				msg = n == 0 and "Index up to date" or string.format("%d file%s synced", n, n == 1 and "" or "s")
+			else
+				local stats = ffi_mod.stats()
+				msg = stats and string.format("%d files indexed", stats.num_docs) or "complete"
+			end
 			progress.done(msg)
 			if on_done then on_done() end
 		else
@@ -103,7 +110,7 @@ local function reinit_engine(config)
 		if config.update_on_start then
 			local update_ok = ffi_mod.update_index_async()
 			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", function() start_watcher_if_enabled(ffi_mod, config) end)
+				watch_indexing(ffi_mod, "Syncing", "update", function() start_watcher_if_enabled(ffi_mod, config) end)
 			else
 				start_watcher_if_enabled(ffi_mod, config)
 			end
@@ -125,7 +132,7 @@ local function deferred_startup(config)
 		if config.update_on_start then
 			local update_ok, update_err = ffi_mod.update_index_async()
 			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", function() start_watcher_if_enabled(ffi_mod, config) end)
+				watch_indexing(ffi_mod, "Syncing", "update", function() start_watcher_if_enabled(ffi_mod, config) end)
 			else
 				vim.notify("[sakuin] Failed to start async update: " .. (update_err or "unknown"), vim.log.levels.ERROR)
 				start_watcher_if_enabled(ffi_mod, config)
@@ -228,7 +235,7 @@ function M.async_index(mode)
 
 		local ok, err = fn_async()
 		if ok then
-			watch_indexing(ffi_mod, label, function() start_watcher_if_enabled(ffi_mod, config) end)
+			watch_indexing(ffi_mod, label, mode, function() start_watcher_if_enabled(ffi_mod, config) end)
 		else
 			vim.notify("[sakuin] Failed to start: " .. (err or "unknown"), vim.log.levels.ERROR)
 		end
