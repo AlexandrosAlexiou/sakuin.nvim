@@ -31,6 +31,8 @@ M.defaults = {
 	search = {
 		-- 0 = unlimited. Stops search early once enough results exist.
 		limit = 10000,
+		-- Idle ms after the last keystroke before a search is submitted.
+		debounce = 150,
 	},
 
 	progress = {

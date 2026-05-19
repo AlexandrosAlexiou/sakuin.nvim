@@ -9,14 +9,14 @@ function M.sakuin(opts)
 	local config = sakuin_config.get()
 	local search_config = config.search or {}
 	local search_limit = search_config.limit or 10000
+	local search_debounce = search_config.debounce or 150
 
-	-- Bumped on every new search; ffi dispatcher uses it to drop stale batches.
 	local generation = 0
+	local query = ""
 
-	--- Convert raw ffi results to picker items and pass them to callback.
 	local function emit_items(results, callback)
 		for _, r in ipairs(results) do
-			local col = r.col - 1 -- 0-indexed for snacks
+			local col = r.col - 1 -- snacks columns are 0-based
 			callback({
 				file = r.path,
 				text = r.path .. ":" .. r.line .. ":" .. col .. ":" .. r.snippet,
@@ -25,6 +25,21 @@ function M.sakuin(opts)
 				score_offset = r.score,
 			})
 		end
+	end
+
+	-- snacks throttles input to a finder:run every 200ms while typing and
+	-- aborts the previous run each time. Sleeping here turns that throttle
+	-- into a trailing debounce: a run superseded mid-sleep is aborted before
+	-- it reaches search_submit, so only a typing pause submits a search.
+	local function wait_for_typing_to_settle(ctx)
+		if search_debounce > 0 then ctx.async:sleep(search_debounce) end
+	end
+
+	local function cancel_search_when_superseded(ctx, my_gen)
+		ctx.async:on("abort", function()
+			sakuin_ffi.unregister_search_callback(my_gen)
+			if my_gen == generation then sakuin_ffi.search_cancel() end
+		end)
 	end
 
 	---@param ctx snacks.picker.finder.ctx
@@ -36,8 +51,11 @@ function M.sakuin(opts)
 			local search = ctx.filter and ctx.filter.search or ""
 			if search == "" then return end
 
+			wait_for_typing_to_settle(ctx)
+
 			generation = generation + 1
 			local my_gen = generation
+			query = search
 			local done = false
 			local error_msg = nil ---@type string?
 
@@ -57,6 +75,8 @@ function M.sakuin(opts)
 				end
 				ctx.async:resume()
 			end)
+
+			cancel_search_when_superseded(ctx, my_gen)
 
 			local ok, submit_err = sakuin_ffi.search_submit(search, my_gen, search_limit)
 			if not ok then
@@ -85,14 +105,46 @@ function M.sakuin(opts)
 		end
 	end
 
+	-- Case-insensitive so UPPER/MixedCase and contiguous camelCase
+	-- ("threadpool" -> "threadPool") match; ASCII lowering keeps byte offsets.
+	local function highlight_query_matches(ret, text, offset)
+		if query == "" then return end
+		local hay = text:lower()
+		for term in query:gmatch("%S+") do
+			local needle = term:lower()
+			local from = 1
+			while #needle > 0 do
+				local s, e = hay:find(needle, from, true)
+				if not s then break end
+				ret[#ret + 1] = {
+					col = offset + s - 1,
+					end_col = offset + e,
+					hl_group = "SnacksPickerMatch",
+				}
+				from = e + 1
+			end
+		end
+	end
+
+	local function format_row(item, picker)
+		local ret = Snacks.picker.format.filename(item, picker)
+		if item.line then
+			ret[#ret + 1] = { " " }
+			local offset = Snacks.picker.highlight.offset(ret)
+			ret[#ret + 1] = { item.line }
+			highlight_query_matches(ret, item.line, offset)
+		end
+		return ret
+	end
+
 	local picker_opts = vim.tbl_deep_extend("force", {
 		title = "Sakuin Search",
 		finder = finder,
-		format = "file",
+		format = format_row,
 		preview = "file",
 		live = true,
 		supports_live = true,
-		-- Disable snacks' built-in fuzzy matcher: Tantivy handles ranking.
+		-- Tantivy ranks results; disable snacks' fuzzy matcher.
 		matcher = { fuzzy = false, sort_empty = false, smartcase = false, ignorecase = false },
 		sort = { fields = { "idx" } },
 		show_empty = true,

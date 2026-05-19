@@ -80,6 +80,7 @@ require("sakuin").setup({
   -- Search options
   search = {
     limit = 10000,     -- max total results (0 = unlimited)
+    debounce = 150,    -- idle ms after the last keystroke before searching
   },
 
   -- Progress notifications
