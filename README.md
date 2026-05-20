@@ -65,6 +65,10 @@ require("sakuin").setup({
     "*.min.js", "*.map", "package-lock.json", "yarn.lock",
   },
 
+  -- Glob whitelist (gitignore syntax); only matching files are indexed.
+  -- nil = no whitelist. e.g. { "*", "src/**" }
+  include_patterns = nil,
+
   -- File extensions to index (nil = all text files detected by content)
   include_extensions = nil,
 
@@ -96,6 +100,41 @@ require("sakuin").setup({
   },
 })
 ```
+
+### Per-project config (`sakuin.toml`)
+
+Drop a `sakuin.toml` at the root of a repo to override the indexing
+settings for that project only. It is meant to be checked into the repo, so
+everyone working on the codebase indexes it the same way — independent of
+their personal `setup()` config.
+
+```toml
+# sakuin.toml — at the project root
+respect_gitignore  = true
+max_file_size      = 1048576
+ignore_patterns    = ["build", "vendor", "*.gen.go"]   # [SearchableFiles.ignore]
+include_patterns   = ["*"]                              # [SearchableFiles.include]
+include_extensions = ["go", "lua", "rs"]
+```
+
+This mirrors a VsChromium `vs-chromium-project.txt`: `ignore_patterns` is
+`[SearchableFiles.ignore]` and `include_patterns` is the glob whitelist
+`[SearchableFiles.include]` (gitignore syntax — `*`, `src/**`, `Makefile`
+all work). With `include_patterns` set, only files matching at least one
+pattern are indexed; ignores still apply on top. `include_extensions` is a
+simpler extension-only shorthand and can be used instead of or alongside it.
+
+Only these five fields are recognized — they are exactly the settings that
+describe *what a project indexes*. Anything else (keymaps, logging, the
+filesystem watcher, search debounce) stays in `setup()` since it's a personal
+editor preference, not a property of the repo.
+
+- A field set in `sakuin.toml` **wins** over the same field in `setup()`.
+  Fields it doesn't set fall back to `setup()`, then the built-in defaults.
+- Arrays **replace**, they don't merge — `ignore_patterns` in the file fully
+  determines the list.
+- A missing or malformed `sakuin.toml` is a warning (see `:SakuinLogs`), not
+  an error; indexing falls back to the `setup()` config.
 
 ## Commands
 

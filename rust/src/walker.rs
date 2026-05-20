@@ -20,10 +20,17 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
         .ignore(use_git)
         .threads(threads);
 
-    if !config.ignore_patterns.is_empty() {
+    let include_patterns = config.include_patterns.as_deref().unwrap_or(&[]);
+    if !config.ignore_patterns.is_empty() || !include_patterns.is_empty() {
         let mut overrides = ignore::overrides::OverrideBuilder::new(project_root);
+        // Whitelist globs: with any present, the ignore crate prunes files that
+        // match none of them — this is vs-chromium's [SearchableFiles.include].
+        for pat in include_patterns {
+            let _ = overrides.add(pat);
+        }
+        // Ignore globs are blacklist entries; the crate treats a bare glob as a
+        // whitelist, so prefix with ! to invert.
         for pat in &config.ignore_patterns {
-            // Prefix with ! to negate (ignore crate uses whitelisting, so we invert)
             let _ = overrides.add(&format!("!{}", pat));
         }
         if let Ok(ov) = overrides.build() {
@@ -200,4 +207,86 @@ fn is_likely_binary(path: &Path) -> bool {
     let null_count = buffer[..bytes_read].iter().filter(|&&b| b == 0).count();
     // More than 0.3% nulls → treat as binary
     null_count * 1000 > bytes_read * 3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::SakuinConfig;
+
+    fn touch(root: &Path, rel: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    }
+
+    fn names(root: &Path, cfg: &SakuinConfig) -> Vec<String> {
+        let mut v: Vec<String> = walk_project(root, cfg)
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        touch(r, "src/main.rs");
+        touch(r, "src/util.rs");
+        touch(r, "docs/readme.md");
+        touch(r, "build/out.rs");
+        dir
+    }
+
+    #[test]
+    fn no_whitelist_indexes_everything() {
+        let dir = fixture();
+        let cfg = SakuinConfig {
+            respect_gitignore: false,
+            ignore_patterns: vec![],
+            ..Default::default()
+        };
+        assert_eq!(
+            names(dir.path(), &cfg),
+            [
+                "build/out.rs",
+                "docs/readme.md",
+                "src/main.rs",
+                "src/util.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn include_patterns_whitelist_prunes_non_matching() {
+        let dir = fixture();
+        let cfg = SakuinConfig {
+            respect_gitignore: false,
+            ignore_patterns: vec![],
+            include_patterns: Some(vec!["src/**".into()]),
+            ..Default::default()
+        };
+        assert_eq!(names(dir.path(), &cfg), ["src/main.rs", "src/util.rs"]);
+    }
+
+    #[test]
+    fn ignore_still_applies_on_top_of_whitelist() {
+        let dir = fixture();
+        let cfg = SakuinConfig {
+            respect_gitignore: false,
+            ignore_patterns: vec!["build".into()],
+            include_patterns: Some(vec!["*".into()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            names(dir.path(), &cfg),
+            ["docs/readme.md", "src/main.rs", "src/util.rs"]
+        );
+    }
 }

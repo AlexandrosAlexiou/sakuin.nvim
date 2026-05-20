@@ -2,6 +2,7 @@ pub mod ffi;
 pub(crate) mod git;
 mod index;
 mod logging;
+mod project_config;
 mod search;
 mod state;
 mod tokenizer;

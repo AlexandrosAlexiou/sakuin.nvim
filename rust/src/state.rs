@@ -155,7 +155,7 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
     let project_root = PathBuf::from(project_root);
     let index_dir = PathBuf::from(index_dir);
 
-    let config = match config_json {
+    let mut config = match config_json {
         Some(json) => serde_json::from_str::<SakuinConfig>(json)
             .map_err(|e| format!("Failed to parse config JSON: {}", e))?,
         None => SakuinConfig::default(),
@@ -167,6 +167,10 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
     if let Some(ref log_file) = config.log_file {
         crate::logging::init(log_file, level)?;
     }
+
+    // A sakuin.toml checked into the repo overrides the Neovim config for the
+    // indexing fields it sets. Done after logger init so its warnings surface.
+    crate::project_config::apply(&project_root, &mut config);
 
     let index = index::open_or_create_index(&index_dir)?;
     let schema = index.schema();

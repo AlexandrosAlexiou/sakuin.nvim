@@ -15,6 +15,10 @@ M.defaults = {
 		"yarn.lock",
 	},
 
+	-- Glob whitelist (gitignore syntax). If set, only files matching at least
+	-- one pattern are indexed (e.g. { "*", "src/**" }). nil = no whitelist.
+	include_patterns = nil,
+
 	-- If set, only index files with these extensions. nil = all text files.
 	include_extensions = nil,
 
