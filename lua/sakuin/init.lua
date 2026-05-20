@@ -66,6 +66,7 @@ local function init_engine_async(config, on_ready)
 		local rust_config = vim.json.encode({
 			max_file_size = config.max_file_size,
 			ignore_patterns = config.ignore_patterns or {},
+			include_patterns = config.include_patterns,
 			include_extensions = config.include_extensions,
 			respect_gitignore = config.respect_gitignore ~= false,
 			log_level = config.log_level or "info",
@@ -154,11 +155,15 @@ end
 ---@field search_cword? string|false Search word under cursor / visual selection
 ---@field rebuild? string|false Full index rebuild
 
+--- A `sakuin.toml` at a project root overrides the indexing fields below
+--- (max_file_size, ignore_patterns, include_patterns, include_extensions,
+--- respect_gitignore) for that repo. See the README for details.
 ---@class sakuin.Config
 ---@field update_on_start? boolean Run incremental index update on startup
 ---@field watch? boolean Watch filesystem for live index updates
 ---@field max_file_size? integer Max file size to index, in bytes
 ---@field ignore_patterns? string[] Patterns to ignore (on top of .gitignore)
+---@field include_patterns? string[] Glob whitelist; only matching files are indexed (nil = no whitelist)
 ---@field include_extensions? string[] File extensions to index (nil = all text files detected by content)
 ---@field respect_gitignore? boolean Respect .gitignore / .ignore files
 ---@field log_level? "error"|"warn"|"info"|"debug"|"trace"|"off"

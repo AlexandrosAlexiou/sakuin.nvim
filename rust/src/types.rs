@@ -21,6 +21,12 @@ pub struct IndexStats {
 pub struct SakuinConfig {
     pub max_file_size: u64,
     pub ignore_patterns: Vec<String>,
+    /// Glob whitelist (gitignore syntax). If set, only files matching at least
+    /// one pattern are indexed — equivalent to vs-chromium's
+    /// `[SearchableFiles.include]`. `["*"]` means "everything". If None, all
+    /// text files are indexed.
+    #[serde(default)]
+    pub include_patterns: Option<Vec<String>>,
     /// If set, only index files with these extensions. If None, all text files are indexed.
     pub include_extensions: Option<Vec<String>>,
     pub respect_gitignore: bool,
@@ -49,6 +55,7 @@ impl Default for SakuinConfig {
                 "package-lock.json".into(),
                 "yarn.lock".into(),
             ],
+            include_patterns: None,
             include_extensions: None,
             respect_gitignore: true,
             log_level: "info".into(),
