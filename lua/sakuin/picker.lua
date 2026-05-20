@@ -120,6 +120,7 @@ function M.sakuin(opts)
 					col = offset + s - 1,
 					end_col = offset + e,
 					hl_group = "SnacksPickerMatch",
+					priority = 200,
 				}
 				from = e + 1
 			end
@@ -131,7 +132,7 @@ function M.sakuin(opts)
 		if item.line then
 			ret[#ret + 1] = { " " }
 			local offset = Snacks.picker.highlight.offset(ret)
-			ret[#ret + 1] = { item.line }
+			Snacks.picker.highlight.format(item, item.line, ret)
 			highlight_query_matches(ret, item.line, offset)
 		end
 		return ret
