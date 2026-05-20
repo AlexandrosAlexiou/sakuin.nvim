@@ -178,6 +178,12 @@ fn find_matching_lines(
     needle: &str,
     cancelled: &Arc<AtomicBool>,
 ) -> Vec<(u32, u32, String)> {
+    // Cap the snippet bytes we send back to Lua. Long lines (minified bundles,
+    // lockfiles, single-line configs) crater the picker because snacks runs
+    // treesitter on every visible snippet on every render. Ripgrep applies the
+    // same cap via --max-columns=500 --max-columns-preview.
+    const MAX_SNIPPET: usize = 500;
+
     let file = match fs::File::open(file_path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
@@ -206,7 +212,18 @@ fn find_matching_lines(
         lowered.push_str(&line);
         lowered.make_ascii_lowercase();
         if let Some(col) = lowered.find(needle) {
-            matches.push((line_idx, (col + 1) as u32, line.trim().to_string()));
+            let trimmed = line.trim();
+            let snippet = if trimmed.len() > MAX_SNIPPET {
+                // Truncate at a UTF-8 boundary at or below MAX_SNIPPET.
+                let mut end = MAX_SNIPPET;
+                while end > 0 && !trimmed.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{} …", &trimmed[..end])
+            } else {
+                trimmed.to_string()
+            };
+            matches.push((line_idx, (col + 1) as u32, snippet));
         }
     }
 
