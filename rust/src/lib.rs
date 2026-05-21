@@ -1,6 +1,6 @@
+mod bridge;
 pub mod ffi;
 pub(crate) mod git;
-mod bridge;
 mod index;
 mod indexing;
 mod logging;
@@ -64,7 +64,8 @@ mod ffi_exports {
                     message: None,
                 }),
                 Err(e) => {
-                    prog.status.store(indexing::PROGRESS_ERROR, Ordering::SeqCst);
+                    prog.status
+                        .store(indexing::PROGRESS_ERROR, Ordering::SeqCst);
                     bridge::push_indexing_event(bridge::IndexingEvent {
                         status: "error",
                         total: prog.total.load(Ordering::Relaxed),

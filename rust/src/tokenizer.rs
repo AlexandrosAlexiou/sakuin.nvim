@@ -43,7 +43,7 @@ impl<'a> TokenStream for TrigramTokenStream<'a> {
         let to = self.char_offsets[self.index + 3];
         self.token.text.clear();
         self.token.text.push_str(&self.text[from..to]);
-        // Must match `query_trigrams` exactly — correctness invariant.
+        // Must match `query_trigrams` exactly, correctness invariant.
         self.token.text.make_ascii_lowercase();
         self.token.offset_from = from;
         self.token.offset_to = to;
