@@ -1,9 +1,12 @@
 pub mod ffi;
 pub(crate) mod git;
+mod bridge;
 mod index;
+mod indexing;
 mod logging;
 mod project_config;
 mod search;
+mod search_worker;
 mod state;
 mod tokenizer;
 mod types;
@@ -51,9 +54,9 @@ mod ffi_exports {
     {
         use std::sync::atomic::Ordering;
         std::thread::spawn(move || {
-            let prog = state::progress();
+            let prog = indexing::progress();
             match f() {
-                Ok(done) => state::push_indexing_event(state::IndexingEvent {
+                Ok(done) => bridge::push_indexing_event(bridge::IndexingEvent {
                     status: "done",
                     total: prog.total.load(Ordering::Relaxed),
                     done,
@@ -61,8 +64,8 @@ mod ffi_exports {
                     message: None,
                 }),
                 Err(e) => {
-                    prog.status.store(state::PROGRESS_ERROR, Ordering::SeqCst);
-                    state::push_indexing_event(state::IndexingEvent {
+                    prog.status.store(indexing::PROGRESS_ERROR, Ordering::SeqCst);
+                    bridge::push_indexing_event(bridge::IndexingEvent {
                         status: "error",
                         total: prog.total.load(Ordering::Relaxed),
                         done: prog.done.load(Ordering::Relaxed),
@@ -76,20 +79,20 @@ mod ffi_exports {
 
     #[no_mangle]
     pub extern "C" fn sakuin_build_index_async() -> ffi::CStatus {
-        spawn_indexing(state::build_index);
+        spawn_indexing(indexing::build_index);
         ffi::CStatus::ok()
     }
 
     #[no_mangle]
     pub extern "C" fn sakuin_update_index_async() -> ffi::CStatus {
-        spawn_indexing(|| state::update_index().map(|(a, u, r)| a + u + r));
+        spawn_indexing(|| indexing::update_index().map(|(a, u, r)| a + u + r));
         ffi::CStatus::ok()
     }
 
     /// Returns NULL if no event is pending. Caller MUST free with `sakuin_free_indexing_event`.
     #[no_mangle]
     pub extern "C" fn sakuin_indexing_take_event() -> *mut ffi::CIndexingEvent {
-        match state::indexing_take_event() {
+        match bridge::indexing_take_event() {
             Some(ev) => Box::into_raw(Box::new(ffi::CIndexingEvent::from_internal(ev))),
             None => std::ptr::null_mut(),
         }
@@ -125,13 +128,13 @@ mod ffi_exports {
         handle_ptr: *mut c_void,
         send_fn_ptr: unsafe extern "C" fn(*mut c_void) -> i32,
     ) {
-        state::register_async_notifier(handle_ptr, send_fn_ptr);
+        bridge::register_async_notifier(handle_ptr, send_fn_ptr);
     }
 
     /// Returns NULL if the queue is empty. Caller MUST free with `sakuin_free_search_message`.
     #[no_mangle]
     pub extern "C" fn sakuin_search_take_result() -> *mut ffi::CSearchMessage {
-        match state::search_take_result() {
+        match bridge::search_take_result() {
             Some(msg) => Box::into_raw(Box::new(ffi::CSearchMessage::from_internal(msg))),
             None => std::ptr::null_mut(),
         }
@@ -175,13 +178,13 @@ mod ffi_exports {
             } else {
                 limit as usize
             };
-            state::search_submit(query_str, generation, lim)
+            search_worker::search_submit(query_str, generation, lim)
         })
     }
 
     #[no_mangle]
     pub extern "C" fn sakuin_search_cancel() {
-        state::search_cancel();
+        search_worker::search_cancel();
     }
 
     /// On success, writes a heap-allocated stats pointer to `*out` (caller
@@ -246,9 +249,9 @@ pub use ffi_exports::*;
 /// Internal API for the debug CLI binary and integration tests.
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::state::{
-        build_index, do_search_streaming, init, progress, shutdown, stats, update_index,
-        PROGRESS_DONE, PROGRESS_ERROR, PROGRESS_RUNNING,
+    pub use crate::indexing::{
+        build_index, progress, update_index, PROGRESS_DONE, PROGRESS_ERROR, PROGRESS_RUNNING,
     };
+    pub use crate::state::{do_search_streaming, init, shutdown, stats};
     pub use crate::types::{IndexStats, SakuinConfig, SearchResult};
 }

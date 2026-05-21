@@ -142,8 +142,8 @@ pub struct CIndexStats {
 }
 
 impl CSearchMessage {
-    pub fn from_internal(msg: crate::state::SearchResultMessage) -> Self {
-        use crate::state::SearchResultMessage;
+    pub fn from_internal(msg: crate::bridge::SearchResultMessage) -> Self {
+        use crate::bridge::SearchResultMessage;
         match msg {
             SearchResultMessage::Batch {
                 generation,
@@ -199,7 +199,7 @@ impl CSearchMessage {
 }
 
 impl CIndexingEvent {
-    pub fn from_internal(ev: crate::state::IndexingEvent) -> Self {
+    pub fn from_internal(ev: crate::bridge::IndexingEvent) -> Self {
         let status = match ev.status {
             "done" => CIndexingStatus::Done,
             "error" => CIndexingStatus::Error,

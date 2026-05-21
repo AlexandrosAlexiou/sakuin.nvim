@@ -215,7 +215,7 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
             for p in &changes.deleted {
                 log::debug!("  git op remove: {:?}", p);
             }
-            if let Err(e) = crate::state::batch_update_files(&changes.deleted, &changes.modified) {
+            if let Err(e) = crate::indexing::batch_update_files(&changes.deleted, &changes.modified) {
                 log::warn!("Git-triggered batch update failed: {}", e);
             }
         }
@@ -247,7 +247,7 @@ fn handle_file_events(
             to_reindex.len(),
             to_remove.len(),
         );
-        if let Err(e) = crate::state::batch_update_files(&to_remove, &to_reindex) {
+        if let Err(e) = crate::indexing::batch_update_files(&to_remove, &to_reindex) {
             log::warn!("Watcher: batch update failed: {}", e);
         }
     }
