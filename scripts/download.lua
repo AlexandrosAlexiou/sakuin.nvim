@@ -10,7 +10,7 @@ M.repo = "AlexandrosAlexiou/sakuin.nvim"
 -- Tag of the release whose binaries match this checkout. Bump on each
 -- release so downloads always target the artifacts produced for the code
 -- currently on disk, not whatever "latest" happens to point at.
-M.version = "v0.5.0"
+M.version = "v0.6.0"
 
 -- target triple → release artifact filename
 -- Convention: `lib<name>-<triple>.{so,dylib}` on unix, `<name>-<triple>.dll` on Windows.
