@@ -1,9 +1,11 @@
+mod binary_detect;
 mod bridge;
 pub mod ffi;
 pub(crate) mod git;
 mod index;
 mod indexing;
 mod logging;
+mod path_filter;
 mod project_config;
 mod search;
 mod search_worker;
