@@ -246,14 +246,17 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
     let writer = state.writer.lock();
     let mut changed = false;
 
+    // Removals stay unfiltered so a now-ignored file still gets evicted.
     for path in to_remove {
         index::delete_by_path(&writer, &state.schema, &rel_path(&state.project_root, path));
         changed = true;
         log::debug!("Watcher: removed {:?}", path);
     }
 
+    let filter = crate::path_filter::PathFilter::new(&state.project_root, &state.config);
     for path in to_reindex {
-        if !path.is_file() {
+        if !filter.is_indexable(path) {
+            log::debug!("Watcher: skipping non-indexable {:?}", path);
             continue;
         }
         // Delete stale doc first (no-op if the file is new).
