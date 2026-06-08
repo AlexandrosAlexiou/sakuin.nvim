@@ -1,28 +1,12 @@
+local binary = require("sakuin.binary")
+
 local M = {}
 
 ---@return string
-local function plugin_root()
-	local source = debug.getinfo(1, "S").source:sub(2)
-	return vim.fn.fnamemodify(source, ":h:h:h")
-end
-
----@return string path, string lib_name
-local function lib_path()
-	local root = plugin_root()
-	local os_name = jit.os
-	local exts = { Windows = ".dll", OSX = ".dylib" }
-	local ext = exts[os_name] or ".so"
-	local prefix = os_name == "Windows" and "" or "lib"
-
-	local name = prefix .. "sakuin" .. ext
-	return root .. "/build/" .. name, name
-end
+local function plugin_root() return binary.plugin_root() end
 
 ---@return boolean
-function M.has_binary()
-	local path = lib_path()
-	return vim.fn.filereadable(path) == 1
-end
+function M.has_binary() return binary.is_current() end
 
 ---@param version? string
 ---@param on_done fun(ok: boolean, err?: string)
@@ -55,7 +39,7 @@ function M.is_installing() return download_in_progress or build_in_progress end
 ---@param on_done fun(ok: boolean, err?: string)
 local function build_async(on_done)
 	local root = plugin_root()
-	local build_script = root .. "/scripts/build.sh"
+	local rust_dir = root .. "/rust"
 
 	if vim.fn.executable("cargo") == 0 then
 		on_done(false, "cargo not found in PATH")
@@ -90,15 +74,7 @@ local function build_async(on_done)
 		vim.schedule(function() vim.api.nvim_echo({ { "[sakuin] " .. latest, "MoreMsg" } }, false, {}) end)
 	end
 
-	local cmd
-	local needs_copy = false
-	if vim.fn.filereadable(build_script) == 1 then
-		cmd = { "bash", build_script, "lib" }
-	else
-		local rust_dir = root .. "/rust"
-		cmd = { "cargo", "build", "--manifest-path", rust_dir .. "/Cargo.toml", "--release", "--lib" }
-		needs_copy = true
-	end
+	local cmd = { "cargo", "build", "--manifest-path", rust_dir .. "/Cargo.toml", "--release", "--lib" }
 
 	vim.system(
 		cmd,
@@ -115,18 +91,19 @@ local function build_async(on_done)
 				return
 			end
 
-			if needs_copy then
-				local _, lib_name = lib_path()
-				local rust_dir = root .. "/rust"
-				local src = rust_dir .. "/target/release/" .. lib_name
-				local dest = root .. "/build/" .. lib_name
-				local copy_ok = (vim.uv or vim.loop).fs_copyfile(src, dest)
-				if not copy_ok then
-					on_done(false, "failed to copy " .. src .. " to " .. dest)
-					return
-				end
+			local src = rust_dir .. "/target/release/" .. binary.unversioned_name()
+			local dest = binary.versioned_path()
+			if vim.fn.filereadable(dest) == 1 then os.remove(dest) end
+			local copy_ok = (vim.uv or vim.loop).fs_copyfile(src, dest)
+			if not copy_ok then
+				on_done(false, "failed to copy " .. src .. " to " .. dest)
+				return
 			end
 
+			-- Ad-hoc re-sign on macOS so the kernel accepts the freshly written dylib.
+			if jit.os == "OSX" then vim.system({ "codesign", "-s", "-", "-f", dest }, { text = true }):wait() end
+
+			binary.cleanup_stale()
 			on_done(true)
 		end)
 	)
@@ -194,6 +171,7 @@ function M.ensure_binary(opts, on_ready)
 			download_pending = {}
 
 			if dl_ok then
+				binary.cleanup_stale()
 				vim.notify("Prebuilt binary installed.", vim.log.levels.INFO, { title = "sakuin" })
 				on_ready(true)
 				for _, callback in ipairs(waiters) do
