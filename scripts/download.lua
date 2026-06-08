@@ -3,14 +3,19 @@
 --- Can be run as: nvim -l scripts/download.lua
 --- Or called programmatically: dofile("scripts/download.lua")
 
+-- Make `require("sakuin.binary")` resolve when run standalone via `nvim -l`.
+do
+	local source = debug.getinfo(1, "S").source:sub(2)
+	local root = vim.fn.fnamemodify(source, ":h:h")
+	package.path = root .. "/lua/?.lua;" .. package.path
+end
+local binary = require("sakuin.binary")
+
 local M = {}
 
 M.repo = "AlexandrosAlexiou/sakuin.nvim"
 
--- Tag of the release whose binaries match this checkout. Bump on each
--- release so downloads always target the artifacts produced for the code
--- currently on disk, not whatever "latest" happens to point at.
-M.version = "v0.6.1"
+M.version = "v" .. binary.version
 
 -- target triple → release artifact filename
 -- Convention: `lib<name>-<triple>.{so,dylib}` on unix, `<name>-<triple>.dll` on Windows.
@@ -31,11 +36,12 @@ M.artifacts = {
 }
 
 ---@param triple string
----@return string runtime filename Neovim looks for under build/
+---@return string versioned runtime filename Neovim looks for under build/
 local function local_name_for(triple)
-	if triple:find("apple%-darwin$") then return "libsakuin.dylib" end
-	if triple:find("windows") then return "sakuin.dll" end
-	return "libsakuin.so"
+	local v = binary.version
+	if triple:find("apple%-darwin$") then return "libsakuin_" .. v .. ".dylib" end
+	if triple:find("windows") then return "sakuin_" .. v .. ".dll" end
+	return "libsakuin_" .. v .. ".so"
 end
 
 local function file_exists(path)

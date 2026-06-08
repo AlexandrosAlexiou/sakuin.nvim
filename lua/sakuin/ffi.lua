@@ -103,15 +103,8 @@ local async_handle = nil -- kept alive to prevent GC
 
 ---@return string
 local function resolve_lib_path()
-	local source = debug.getinfo(1, "S").source:sub(2) -- strip leading @
-	local plugin_root = vim.fn.fnamemodify(source, ":h:h:h")
-
-	local os_name = jit.os -- "Windows", "Linux", "OSX"
-	local exts = { Windows = ".dll", OSX = ".dylib" }
-	local ext = exts[os_name] or ".so"
-
-	local prefix = os_name == "Windows" and "" or "lib"
-	return plugin_root .. "/build/" .. prefix .. "sakuin" .. ext
+	local path = require("sakuin.binary").resolve()
+	return path
 end
 
 -- ffi.string segfaults on NULL (calls strlen).
