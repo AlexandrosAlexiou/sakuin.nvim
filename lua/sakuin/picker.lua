@@ -12,7 +12,6 @@ function M.sakuin(opts)
 	local search_debounce = search_config.debounce or 150
 
 	local generation = 0
-	local query = ""
 
 	local function compute_match_positions(text, q)
 		if q == "" or not text or text == "" then return nil end
@@ -97,7 +96,6 @@ function M.sakuin(opts)
 
 			generation = generation + 1
 			local my_gen = generation
-			query = search
 			local done = false
 			local error_msg = nil ---@type string?
 
