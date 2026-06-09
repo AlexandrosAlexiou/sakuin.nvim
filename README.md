@@ -19,7 +19,7 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 {
   "AlexandrosAlexiou/sakuin.nvim",
   build = function()
-    require("sakuin.install").ensure_binary()
+    require("sakuin.install").build()
   end,
   dependencies = { "folke/snacks.nvim" },
   config = function()
