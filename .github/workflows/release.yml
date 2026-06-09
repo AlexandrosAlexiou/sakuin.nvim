@@ -121,7 +121,8 @@ jobs:
           shell: sh
           sync_files: true
           run: |
-            sudo pkg_add rust
+            echo "https://cdn.openbsd.org/pub/OpenBSD" | sudo tee /etc/installurl
+            sudo pkg_add -I rust
             rustc -vV
             cd rust
             cargo build --release --lib
