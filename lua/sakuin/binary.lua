@@ -10,7 +10,7 @@ local M = {}
 
 --- Single source of truth for the version. Bump alongside `rust/Cargo.toml`.
 --- The release tag is `"v" .. M.version`.
-M.version = "0.6.1"
+M.version = "0.7.0"
 
 ---@return string
 local function plugin_root()
