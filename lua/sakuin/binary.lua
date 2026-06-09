@@ -67,32 +67,29 @@ end
 ---@return boolean
 function M.is_current() return readable(M.versioned_path()) end
 
----@return string[]
-function M.installed_versions()
-	local ext, prefix = lib_affixes()
-	local pat = "^" .. prefix .. "sakuin_(.+)" .. ext:gsub("%.", "%%.") .. "$"
+--- No-op until the current binary exists, so the legacy fallback survives a
+--- failed install. Sweeps everything else we own under build/: superseded
+--- versioned binaries, their `.sha256` sidecars, the legacy unversioned name,
+--- and orphaned `.tmp` files left by interrupted downloads.
+function M.cleanup_stale()
+	if not readable(M.versioned_path()) then return end
+
+	local _, prefix = lib_affixes()
+	local lib_prefix = prefix .. "sakuin"
+	local keep = M.versioned_name()
+	local keep_sidecar = keep .. ".sha256"
+
 	local uv = vim.uv or vim.loop
-	local versions = {}
-	local handle = uv.fs_scandir(M.build_dir())
-	if not handle then return versions end
+	local dir = M.build_dir()
+	local handle = uv.fs_scandir(dir)
+	if not handle then return end
 	while true do
 		local name = uv.fs_scandir_next(handle)
 		if not name then break end
-		local v = name:match(pat)
-		if v then versions[#versions + 1] = v end
+		if name:sub(1, #lib_prefix) == lib_prefix and name ~= keep and name ~= keep_sidecar then
+			os.remove(dir .. "/" .. name)
+		end
 	end
-	return versions
-end
-
---- No-op until the current binary exists, so the legacy fallback survives a
---- failed install.
-function M.cleanup_stale()
-	if not readable(M.versioned_path()) then return end
-	for _, v in ipairs(M.installed_versions()) do
-		if v ~= M.version then os.remove(M.versioned_path(v)) end
-	end
-	local legacy = M.unversioned_path()
-	if readable(legacy) then os.remove(legacy) end
 end
 
 return M

@@ -44,6 +44,16 @@ local function init_engine_async(config, on_ready)
 	local ffi_mod = require("sakuin.ffi")
 
 	if ffi_mod.is_loaded() then
+		-- Loaded binary is stale (e.g. :Lazy update without restart). Can't hot-swap a
+		-- dlopen'd lib, so install the right version for next start and ask to restart.
+		if not require("sakuin.binary").is_current() then
+			require("sakuin.install").ensure_binary({}, function() end)
+			vim.notify(
+				"[sakuin] native binary is out of date — restart Neovim to load the updated version",
+				vim.log.levels.WARN,
+				{ title = "sakuin" }
+			)
+		end
 		on_ready(ffi_mod)
 		return
 	end
