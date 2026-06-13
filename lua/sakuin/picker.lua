@@ -58,7 +58,6 @@ function M.sakuin(opts)
 
 			callback({
 				file = r.path,
-				text = r.path .. ":" .. r.line .. ":" .. col .. ":" .. r.snippet,
 				pos = { r.line, col },
 				line = r.snippet,
 				score_offset = r.score,
