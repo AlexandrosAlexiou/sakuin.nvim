@@ -217,12 +217,11 @@ function M.setup(opts)
 				"<cmd>SakuinCword<cr>",
 				{ desc = "Sakuin search word under cursor" }
 			)
-			vim.keymap.set(
-				"x",
-				config.keymaps.search_cword,
-				'"vy:<C-u>lua require("sakuin.picker").sakuin({ search = vim.fn.getreg("v") })<CR>',
-				{ desc = "Sakuin search visual selection" }
-			)
+			vim.keymap.set("x", config.keymaps.search_cword, function()
+				vim.cmd('noautocmd normal! "vy')
+				local text = vim.fn.getreg("v")
+				if text and text ~= "" then require("sakuin.picker").sakuin({ search = text }) end
+			end, { desc = "Sakuin search visual selection" })
 		end
 		if config.keymaps.rebuild then
 			vim.keymap.set("n", config.keymaps.rebuild, "<cmd>SakuinBuild<cr>", { desc = "Sakuin rebuild index" })
