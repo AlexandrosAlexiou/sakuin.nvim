@@ -11,7 +11,12 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 - [snacks.nvim](https://github.com/folke/snacks.nvim) for the picker UI
 - A prebuilt binary or a **Rust toolchain** to compile from source
 
+
+
 ## Installation
+
+> [!WARNING]
+> **Windows is not currently supported.** Neovim does not export `uv_async_send` on Windows, which this plugin requires for thread-safe async notifications. See [neovim/neovim#40307](https://github.com/neovim/neovim/discussions/40307) for details.
 
 ### [lazy.nvim](https://github.com/folke/lazy.nvim)
 
