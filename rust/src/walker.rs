@@ -67,11 +67,7 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
             let path = entry.path().to_path_buf();
 
             if let Some(ref exts) = include_extensions {
-                let file_ext = path
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_lowercase())
-                    .unwrap_or_default();
-                if !exts.iter().any(|e| e.to_lowercase() == file_ext) {
+                if !crate::path_filter::extension_allowed(&path, exts) {
                     return ignore::WalkState::Continue;
                 }
             }

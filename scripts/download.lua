@@ -35,15 +35,6 @@ M.artifacts = {
 	["aarch64-linux-android"] = "libsakuin-aarch64-linux-android.so",
 }
 
----@param triple string
----@return string versioned runtime filename Neovim looks for under build/
-local function local_name_for(triple)
-	local v = binary.version
-	if triple:find("apple%-darwin$") then return "libsakuin_" .. v .. ".dylib" end
-	if triple:find("windows") then return "sakuin_" .. v .. ".dll" end
-	return "libsakuin_" .. v .. ".so"
-end
-
 local function file_exists(path)
 	local f = io.open(path, "r")
 	if f then
@@ -114,12 +105,6 @@ function M.detect_triple()
 	if sys == "FreeBSD" then return arch .. "-unknown-freebsd" end
 	if sys == "OpenBSD" then return arch .. "-unknown-openbsd" end
 	return nil
-end
-
----@return string
-function M.plugin_root()
-	local source = debug.getinfo(1, "S").source:sub(2)
-	return vim.fn.fnamemodify(source, ":h:h")
 end
 
 local function curl_args(url, dest)
@@ -231,8 +216,8 @@ function M.download_impl(run, version)
 	local triple = M.detect_triple()
 	if not triple or not M.artifacts[triple] then return false, "Unsupported platform: " .. (triple or "unknown") end
 
-	local build_dir = M.plugin_root() .. "/build"
-	local dest = build_dir .. "/" .. local_name_for(triple)
+	local build_dir = binary.build_dir()
+	local dest = binary.versioned_path()
 	local dest_tmp = dest .. ".tmp"
 	local sidecar = dest .. ".sha256"
 	vim.fn.mkdir(build_dir, "p")
