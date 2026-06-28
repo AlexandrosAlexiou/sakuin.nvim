@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use rayon::prelude::*;
-use tantivy::collector::TopDocs;
+use tantivy::collector::DocSetCollector;
 use tantivy::query::EnableScoring;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, TermQuery};
 use tantivy::schema::{IndexRecordOption, Schema, Value};
@@ -78,13 +78,12 @@ where
         return Ok(());
     }
 
-    let candidate_limit = num_docs.max(1);
-    let top_docs = searcher
+    let candidates = searcher
         .search_with_executor(
             &tantivy_query,
-            &TopDocs::with_limit(candidate_limit).order_by_score(),
+            &DocSetCollector,
             params.executor,
-            EnableScoring::enabled_from_statistics_provider(&searcher, &searcher),
+            EnableScoring::disabled_from_searcher(&searcher),
         )
         .map_err(|e| format!("Search failed: {}", e))?;
 
@@ -103,7 +102,7 @@ where
     let scan_handle = std::thread::Builder::new()
         .name("sakuin-scan".into())
         .spawn(move || {
-            top_docs.into_par_iter().for_each(|(_score, doc_address)| {
+            candidates.into_par_iter().for_each(|doc_address| {
                 if cancelled.load(Ordering::Relaxed) || total_clone.load(Ordering::Relaxed) >= limit
                 {
                     return;
