@@ -105,13 +105,6 @@ fn run_index_job<F>(
     });
 }
 
-pub(crate) fn rel_path(project_root: &std::path::Path, path: &std::path::Path) -> String {
-    path.strip_prefix(project_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string()
-}
-
 fn begin_indexing() {
     CANCEL_INDEXING.store(false, Ordering::SeqCst);
     let prog = progress();
@@ -181,7 +174,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let files_to_index: Vec<(PathBuf, bool)> = files_on_disk
         .into_iter()
         .filter_map(|file_path| {
-            let rel = rel_path(&s.project_root, &file_path);
+            let rel = index::rel_path(&s.project_root, &file_path);
             let disk_mtime = std::fs::metadata(&file_path)
                 .and_then(|m| m.modified())
                 .ok()
@@ -204,7 +197,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         let w = s.writer.lock();
         for (path, is_update) in &files_to_index {
             if *is_update {
-                index::delete_by_path(&w, &s.schema, &rel_path(&s.project_root, path));
+                index::delete_by_path(&w, &s.schema, &index::rel_path(&s.project_root, path));
             }
         }
     }
@@ -248,7 +241,11 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
 
     // Removals stay unfiltered so a now-ignored file still gets evicted.
     for path in to_remove {
-        index::delete_by_path(&writer, &state.schema, &rel_path(&state.project_root, path));
+        index::delete_by_path(
+            &writer,
+            &state.schema,
+            &index::rel_path(&state.project_root, path),
+        );
         changed = true;
         log::debug!("Watcher: removed {:?}", path);
     }
@@ -260,7 +257,11 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
             continue;
         }
         // Delete stale doc first (no-op if the file is new).
-        index::delete_by_path(&writer, &state.schema, &rel_path(&state.project_root, path));
+        index::delete_by_path(
+            &writer,
+            &state.schema,
+            &index::rel_path(&state.project_root, path),
+        );
         match index::index_file(&writer, &state.schema, &state.project_root, path) {
             Ok(()) => {
                 changed = true;
