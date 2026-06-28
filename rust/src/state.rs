@@ -161,6 +161,7 @@ pub fn stats() -> Result<IndexStats, String> {
         &state.index,
         &state.reader,
         &state.project_root,
+        &state.index_dir,
     ))
 }
 

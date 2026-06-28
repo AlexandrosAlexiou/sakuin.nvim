@@ -122,12 +122,15 @@ pub struct PreparedDoc {
     pub size: u64,
 }
 
-pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
-    let relative = file_path
-        .strip_prefix(project_root)
-        .unwrap_or(file_path)
+pub fn rel_path(project_root: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root)
+        .unwrap_or(path)
         .to_string_lossy()
-        .to_string();
+        .to_string()
+}
+
+pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
+    let relative = rel_path(project_root, file_path);
 
     let filename = file_path
         .file_name()
@@ -246,19 +249,22 @@ pub fn all_indexed_mtimes(
     map
 }
 
-pub fn compute_stats(index: &Index, reader: &IndexReader, project_root: &Path) -> IndexStats {
+pub fn compute_stats(
+    index: &Index,
+    reader: &IndexReader,
+    project_root: &Path,
+    index_dir: &Path,
+) -> IndexStats {
     let searcher = reader.searcher();
     let num_docs = searcher.num_docs();
     let num_segments = searcher.segment_readers().len();
 
-    let index_path = index.directory().list_managed_files();
-    let index_size_bytes: u64 = index_path
+    let index_files_dir = index_dir.join("index");
+    let index_size_bytes: u64 = index
+        .directory()
+        .list_managed_files()
         .iter()
-        .filter_map(|p| {
-            fs::metadata(project_root.join(".sakuin").join("index").join(p))
-                .ok()
-                .map(|m| m.len())
-        })
+        .filter_map(|p| fs::metadata(index_files_dir.join(p)).ok().map(|m| m.len()))
         .sum();
 
     IndexStats {
