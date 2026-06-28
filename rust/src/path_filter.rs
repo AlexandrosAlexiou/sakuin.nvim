@@ -6,6 +6,14 @@ use ignore::overrides::{Override, OverrideBuilder};
 use crate::binary_detect::is_likely_binary;
 use crate::types::SakuinConfig;
 
+pub(crate) fn extension_allowed(path: &Path, exts: &[String]) -> bool {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    exts.iter().any(|e| e.to_lowercase() == ext)
+}
+
 pub struct PathFilter {
     project_root: PathBuf,
     include_overrides: Override,
@@ -99,11 +107,7 @@ impl PathFilter {
         }
 
         if let Some(exts) = &self.include_extensions {
-            let ext = path
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase())
-                .unwrap_or_default();
-            if !exts.iter().any(|e| e.to_lowercase() == ext) {
+            if !extension_allowed(path, exts) {
                 return false;
             }
         }
