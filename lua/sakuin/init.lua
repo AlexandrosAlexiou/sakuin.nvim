@@ -4,6 +4,20 @@ local function start_watcher_if_enabled(ffi_mod, config)
 	if config.watch then vim.schedule(function() ffi_mod.start_watcher() end) end
 end
 
+---@param config table
+---@return string
+local function build_rust_config(config)
+	return vim.json.encode({
+		max_file_size = config.max_file_size,
+		ignore_patterns = config.ignore_patterns or {},
+		include_patterns = config.include_patterns,
+		include_extensions = config.include_extensions,
+		respect_gitignore = config.respect_gitignore ~= false,
+		log_level = config.log_level or "info",
+		log_file = config.log_file,
+	})
+end
+
 ---@param ffi_mod table
 ---@param label string
 ---@param mode "build"|"update"
@@ -36,6 +50,16 @@ local function watch_indexing(ffi_mod, label, mode, on_done)
 			progress.fail(label, event.error or "unknown error")
 		end
 	end)
+end
+
+---@param ffi_mod table
+---@param config table
+local function run_startup_sync(ffi_mod, config)
+	if config.update_on_start and ffi_mod.update_index_async() then
+		watch_indexing(ffi_mod, "Syncing", "update", function() start_watcher_if_enabled(ffi_mod, config) end)
+	else
+		start_watcher_if_enabled(ffi_mod, config)
+	end
 end
 
 ---@param config table
@@ -73,16 +97,7 @@ local function init_engine_async(config, on_ready)
 
 		local root = vim.fn.getcwd()
 		local index_dir = root .. "/.sakuin"
-		local rust_config = vim.json.encode({
-			max_file_size = config.max_file_size,
-			ignore_patterns = config.ignore_patterns or {},
-			include_patterns = config.include_patterns,
-			include_extensions = config.include_extensions,
-			respect_gitignore = config.respect_gitignore ~= false,
-			log_level = config.log_level or "info",
-			log_file = config.log_file,
-		})
-		local init_ok, init_err = ffi_mod.init(root, index_dir, rust_config)
+		local init_ok, init_err = ffi_mod.init(root, index_dir, build_rust_config(config))
 		if not init_ok then
 			vim.notify("[sakuin] Failed to initialize: " .. (init_err or "unknown error"), vim.log.levels.ERROR)
 			on_ready(nil)
@@ -102,33 +117,14 @@ local function reinit_engine(config)
 
 	local root = vim.fn.getcwd()
 	local index_dir = root .. "/.sakuin"
-	local rust_config = vim.json.encode({
-		max_file_size = config.max_file_size,
-		ignore_patterns = config.ignore_patterns or {},
-		include_extensions = config.include_extensions,
-		respect_gitignore = config.respect_gitignore ~= false,
-		log_level = config.log_level or "info",
-		log_file = config.log_file,
-	})
 
-	local ok, reinit_err = ffi_mod.reinit(root, index_dir, rust_config)
+	local ok, reinit_err = ffi_mod.reinit(root, index_dir, build_rust_config(config))
 	if not ok then
 		vim.notify("[sakuin] Failed to reinitialize: " .. (reinit_err or "unknown error"), vim.log.levels.ERROR)
 		return
 	end
 
-	if vim.fn.isdirectory(index_dir) == 1 then
-		if config.update_on_start then
-			local update_ok = ffi_mod.update_index_async()
-			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", "update", function() start_watcher_if_enabled(ffi_mod, config) end)
-			else
-				start_watcher_if_enabled(ffi_mod, config)
-			end
-		else
-			start_watcher_if_enabled(ffi_mod, config)
-		end
-	end
+	if vim.fn.isdirectory(index_dir) == 1 then run_startup_sync(ffi_mod, config) end
 end
 
 -- Skips if no .sakuin/ exists (user must :SakuinBuild first).
@@ -139,18 +135,7 @@ local function deferred_startup(config)
 
 	init_engine_async(config, function(ffi_mod)
 		if not ffi_mod then return end
-
-		if config.update_on_start then
-			local update_ok, update_err = ffi_mod.update_index_async()
-			if update_ok then
-				watch_indexing(ffi_mod, "Syncing", "update", function() start_watcher_if_enabled(ffi_mod, config) end)
-			else
-				vim.notify("[sakuin] Failed to start async update: " .. (update_err or "unknown"), vim.log.levels.ERROR)
-				start_watcher_if_enabled(ffi_mod, config)
-			end
-		else
-			start_watcher_if_enabled(ffi_mod, config)
-		end
+		run_startup_sync(ffi_mod, config)
 	end)
 end
 
