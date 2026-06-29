@@ -186,32 +186,44 @@ local function decode_indexing_event(ptr)
 	return event
 end
 
+local function report_callback_error(err)
+	vim.schedule(function() vim.notify("[sakuin] callback error: " .. tostring(err), vim.log.levels.ERROR) end)
+end
+
+local function dispatch_search_msg(msg)
+	local callback = search_callbacks[msg.generation]
+	if not callback then return end
+	if msg.msg_type == "batch" then
+		callback("batch", msg.results, nil, msg.total)
+	elseif msg.msg_type == "done" then
+		search_callbacks[msg.generation] = nil
+		callback("done", nil, nil, msg.total)
+	elseif msg.msg_type == "error" then
+		search_callbacks[msg.generation] = nil
+		callback("error", nil, msg.error, nil)
+	end
+end
+
 local function on_async_notification()
 	if not lib then return end
 
 	local idx_raw = lib.sakuin_indexing_take_event()
 	if idx_raw ~= nil then
 		local event = decode_indexing_event(idx_raw)
-		if lua_indexing_callback then lua_indexing_callback(event) end
+		if lua_indexing_callback then
+			local ok, err = pcall(lua_indexing_callback, event)
+			if not ok then report_callback_error(err) end
+		end
 	end
 
+	-- pcall per message: a throwing callback must not abort the drain, or
+	-- messages queued behind it leak their native result memory.
 	while true do
 		local raw = lib.sakuin_search_take_result()
 		if raw == nil then break end
 
-		local msg = decode_search_message(raw)
-		local callback = search_callbacks[msg.generation]
-		if callback then
-			if msg.msg_type == "batch" then
-				callback("batch", msg.results, nil, msg.total)
-			elseif msg.msg_type == "done" then
-				search_callbacks[msg.generation] = nil
-				callback("done", nil, nil, msg.total)
-			elseif msg.msg_type == "error" then
-				search_callbacks[msg.generation] = nil
-				callback("error", nil, msg.error, nil)
-			end
-		end
+		local ok, err = pcall(dispatch_search_msg, decode_search_message(raw))
+		if not ok then report_callback_error(err) end
 	end
 end
 
