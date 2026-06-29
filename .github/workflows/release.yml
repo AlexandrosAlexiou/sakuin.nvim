@@ -20,22 +20,78 @@ jobs:
       matrix:
         include:
           # Linux glibc
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu,   libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-gnu.so }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu,  libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-gnu.so }
+          - {
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              libname: libsakuin.so,
+              artifact: libsakuin-x86_64-unknown-linux-gnu.so,
+            }
+          - {
+              os: ubuntu-latest,
+              target: aarch64-unknown-linux-gnu,
+              libname: libsakuin.so,
+              artifact: libsakuin-aarch64-unknown-linux-gnu.so,
+            }
           # Linux musl
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl,  libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-linux-musl.so }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-linux-musl.so }
+          - {
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-musl,
+              libname: libsakuin.so,
+              artifact: libsakuin-x86_64-unknown-linux-musl.so,
+            }
+          - {
+              os: ubuntu-latest,
+              target: aarch64-unknown-linux-musl,
+              libname: libsakuin.so,
+              artifact: libsakuin-aarch64-unknown-linux-musl.so,
+            }
           # Android
-          - { os: ubuntu-latest, target: aarch64-linux-android,      libname: libsakuin.so,    artifact: libsakuin-aarch64-linux-android.so }
+          - {
+              os: ubuntu-latest,
+              target: aarch64-linux-android,
+              libname: libsakuin.so,
+              artifact: libsakuin-aarch64-linux-android.so,
+            }
           # FreeBSD — x86_64 has prebuilt std; aarch64 requires build-std + nightly
-          - { os: ubuntu-latest, target: x86_64-unknown-freebsd,     libname: libsakuin.so,    artifact: libsakuin-x86_64-unknown-freebsd.so }
-          - { os: ubuntu-latest, target: aarch64-unknown-freebsd,    libname: libsakuin.so,    artifact: libsakuin-aarch64-unknown-freebsd.so, build_std: true }
+          - {
+              os: ubuntu-latest,
+              target: x86_64-unknown-freebsd,
+              libname: libsakuin.so,
+              artifact: libsakuin-x86_64-unknown-freebsd.so,
+            }
+          - {
+              os: ubuntu-latest,
+              target: aarch64-unknown-freebsd,
+              libname: libsakuin.so,
+              artifact: libsakuin-aarch64-unknown-freebsd.so,
+              build_std: true,
+            }
           # macOS
-          - { os: macos-latest,  target: aarch64-apple-darwin,       libname: libsakuin.dylib, artifact: libsakuin-aarch64-apple-darwin.dylib }
-          - { os: macos-latest,  target: x86_64-apple-darwin,        libname: libsakuin.dylib, artifact: libsakuin-x86_64-apple-darwin.dylib }
+          - {
+              os: macos-latest,
+              target: aarch64-apple-darwin,
+              libname: libsakuin.dylib,
+              artifact: libsakuin-aarch64-apple-darwin.dylib,
+            }
+          - {
+              os: macos-latest,
+              target: x86_64-apple-darwin,
+              libname: libsakuin.dylib,
+              artifact: libsakuin-x86_64-apple-darwin.dylib,
+            }
           # Windows MSVC
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,    libname: sakuin.dll,      artifact: sakuin-x86_64-pc-windows-msvc.dll }
-          - { os: windows-latest, target: aarch64-pc-windows-msvc,   libname: sakuin.dll,      artifact: sakuin-aarch64-pc-windows-msvc.dll }
+          - {
+              os: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              libname: sakuin.dll,
+              artifact: sakuin-x86_64-pc-windows-msvc.dll,
+            }
+          - {
+              os: windows-latest,
+              target: aarch64-pc-windows-msvc,
+              libname: sakuin.dll,
+              artifact: sakuin-aarch64-pc-windows-msvc.dll,
+            }
     steps:
       - uses: actions/checkout@v6
         with:
@@ -99,13 +155,23 @@ jobs:
   build-openbsd:
     name: Build (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64, version: "7.8", target: x86_64-unknown-openbsd,  artifact: libsakuin-x86_64-unknown-openbsd.so }
-          - { arch: arm64,  version: "7.8", target: aarch64-unknown-openbsd, artifact: libsakuin-aarch64-unknown-openbsd.so }
+          - {
+              arch: x86_64,
+              version: "7.8",
+              target: x86_64-unknown-openbsd,
+              artifact: libsakuin-x86_64-unknown-openbsd.so,
+            }
+          - {
+              arch: arm64,
+              version: "7.8",
+              target: aarch64-unknown-openbsd,
+              artifact: libsakuin-aarch64-unknown-openbsd.so,
+            }
     steps:
       - uses: actions/checkout@v6
         with:
