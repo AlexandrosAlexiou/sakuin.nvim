@@ -1,6 +1,6 @@
 [package]
 name = "sakuin"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Indexed full-text search engine for Neovim, powered by Tantivy"
 license = "MIT"
