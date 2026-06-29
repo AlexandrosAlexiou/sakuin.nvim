@@ -17,6 +17,10 @@ mod watcher;
 
 use std::os::raw::{c_char, c_void};
 
+#[cfg(not(target_os = "openbsd"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 // These extern "C" fns validate raw ptrs internally; `unsafe` on the fn itself is incorrect.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 mod ffi_exports {
