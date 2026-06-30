@@ -129,6 +129,11 @@ end
 --- Blocking install for lazy's `build` step, so lazy waits and sees failures.
 ---@param opts? { version?: string }
 function M.build(opts)
+	if require("sakuin.ffi").is_loaded() then
+		vim.schedule(
+			function() vim.notify("Restart Neovim to load the update.", vim.log.levels.WARN, { title = "sakuin" }) end
+		)
+	end
 	if M.has_binary() then
 		binary.cleanup_stale()
 		return
