@@ -1,6 +1,14 @@
-# sakuin.nvim (索引)
+<p align="center">
+  <a href="https://github.com/AlexandrosAlexiou/sakuin.nvim">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/sakuin-dark.jpeg">
+      <source media="(prefers-color-scheme: light)" srcset=".github/assets/sakuin-light.png">
+      <img src=".github/sakuin-light.png" alt="sakuin.nvim banner" width="100%">
+    </picture>
+  </a>
+</p>
 
-Fast full-text search for Neovim, powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
+Sakuin (索引) is a fast full-text search plugin for Neovim, powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
 
 Working on massive codebases, the usual live-grep tools start to drag once a project gets big enough. Sakuin builds a persistent index up front so queries come back in milliseconds, even across hundreds of thousands of files, and streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
 
@@ -16,7 +24,7 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 ## Installation
 
 > [!WARNING]
-> **Windows is not currently supported.** Neovim does not export `uv_async_send` on Windows, which this plugin requires for thread-safe async notifications. See [neovim/neovim#40307](https://github.com/neovim/neovim/discussions/40307) for details.
+> **Windows is not currently supported.** Neovim does not export `uv_async_send` on Windows, which this plugin requires for thread-safe async notifications. See [neovim/neovim#40307](https://github.com/neovim/neovim/discussions/40307#discussioncomment-17436804) for details.
 
 ### [lazy.nvim](https://github.com/folke/lazy.nvim)
 
@@ -165,13 +173,6 @@ editor preference, not a property of the repo.
 ```vim
 :checkhealth sakuin
 ```
-
-## Philosophy
-This project isn’t something most developers will need, but I find it useful in certain situations. I wanted to build something interesting and use it as an opportunity to learn a few things along the way.
-
-![YAGNI](.github/yagni.jpeg)
-
-> _Credit: [monkeyuser.com](https://monkeyuser.com)_
 
 ## License
 
