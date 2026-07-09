@@ -31,7 +31,7 @@ pub fn is_git_sentinel(path: &Path, project_root: &Path) -> bool {
 }
 
 fn collect_diff(
-    diff: &git2::Diff<'_>,
+    diff: &git2::Diff,
     project_root: &Path,
     changes: &mut GitChanges,
 ) -> Result<(), String> {
@@ -106,7 +106,7 @@ pub fn detect_changes(project_root: &Path) -> Result<GitChanges, String> {
     Ok(changes)
 }
 
-fn categorize_delta(delta: &git2::DiffDelta<'_>, project_root: &Path, changes: &mut GitChanges) {
+fn categorize_delta(delta: &git2::DiffDelta, project_root: &Path, changes: &mut GitChanges) {
     use git2::Delta;
 
     match delta.status() {
