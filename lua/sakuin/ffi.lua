@@ -304,10 +304,7 @@ end
 ---@return boolean ok
 ---@return string|nil err
 function M.reinit(project_root, index_dir, config_json)
-	-- Shut down the existing Rust state (watcher, writer, etc.)
 	M.shutdown()
-
-	-- Recreate the async handle for uv notifications
 	setup_async_handle()
 
 	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))

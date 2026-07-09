@@ -153,7 +153,6 @@ fn classify_event(
     git_sentinel_changed: &mut bool,
 ) {
     for path in &event.paths {
-        // Check for git sentinel changes first.
         if git::is_git_sentinel(path, project_root) {
             *git_sentinel_changed = true;
             log::debug!("Git sentinel changed: {:?}", path);
@@ -161,7 +160,6 @@ fn classify_event(
             continue;
         }
 
-        // Skip all other .git/ internal files.
         if git::is_git_internal_path(path) {
             continue;
         }
@@ -196,7 +194,6 @@ fn handle_git_operation(project_root: &Path, last_head_oid: &mut Option<String>)
         git::detect_changes(project_root)
     });
 
-    // Update tracked HEAD for next time.
     *last_head_oid = git::current_head_oid(project_root);
 
     match changes {
