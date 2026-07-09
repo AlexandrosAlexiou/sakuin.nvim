@@ -154,8 +154,9 @@ pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc,
 
     let size = metadata.len();
 
-    let body = fs::read_to_string(file_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
+    let bytes =
+        fs::read(file_path).map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
+    let body = String::from_utf8_lossy(&bytes).into_owned();
 
     Ok(PreparedDoc {
         relative,
