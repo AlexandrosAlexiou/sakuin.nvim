@@ -195,12 +195,10 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
-    /// Helper: check if any path in a list ends with the given suffix.
     fn has_path_ending(paths: &[PathBuf], suffix: &str) -> bool {
         paths.iter().any(|p| p.to_string_lossy().ends_with(suffix))
     }
 
-    /// Create a temp dir with a real git repo.
     fn create_git_project() -> TempDir {
         let dir = TempDir::new().unwrap();
         let root = dir.path();

@@ -37,7 +37,6 @@ where
         return Ok(());
     }
 
-    // ASCII-only case folding — non-ASCII keeps its original casing.
     let needle = query_str.to_ascii_lowercase();
 
     let body_field = params.schema.get_field(FIELD_BODY).unwrap();
@@ -45,8 +44,6 @@ where
     let filename_field = params.schema.get_field(FIELD_FILENAME).unwrap();
     let fields = [body_field, path_field, filename_field];
 
-    // Sub-trigram queries fall back to AllQuery; the line-scan verifier still
-    // enforces correctness, just over a larger candidate set.
     let trigrams = query_trigrams(&needle);
     let tantivy_query: Box<dyn tantivy::query::Query> = if trigrams.is_empty() {
         Box::new(AllQuery)
@@ -213,7 +210,6 @@ fn find_matching_lines(
         if let Some(col) = lowered.find(needle) {
             let trimmed = line.trim();
             let snippet = if trimmed.len() > MAX_SNIPPET {
-                // Truncate at a UTF-8 boundary at or below MAX_SNIPPET.
                 let mut end = MAX_SNIPPET;
                 while end > 0 && !trimmed.is_char_boundary(end) {
                     end -= 1;
@@ -386,7 +382,6 @@ mod tests {
 
     #[test]
     fn test_phrase_matches_exact_adjacent_words() {
-        // "asynchronous programming" must match only lines containing those words adjacent.
         let (reader, schema, dir) = setup_test_index(&[(
             "docs.rs",
             "// asynchronous programming is fun\nlet asynchronous = 1;\nlet programming = 2;\n",
@@ -399,7 +394,6 @@ mod tests {
 
     #[test]
     fn test_phrase_does_not_match_words_on_separate_lines() {
-        // Words present in the file but never adjacent on the same line.
         let (reader, schema, dir) = setup_test_index(&[(
             "separate.rs",
             "let asynchronous = 1;\nlet programming = 2;\n",

@@ -25,7 +25,7 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
     if !config.ignore_patterns.is_empty() || !include_patterns.is_empty() {
         let mut overrides = ignore::overrides::OverrideBuilder::new(project_root);
         // Whitelist globs: with any present, the ignore crate prunes files that
-        // match none of them — this is vs-chromium's [SearchableFiles.include].
+        // match none of them. This is vs-chromium's [SearchableFiles.include].
         for pat in include_patterns {
             let _ = overrides.add(pat);
         }
