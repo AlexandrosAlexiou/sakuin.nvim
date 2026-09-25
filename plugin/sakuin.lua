@@ -57,7 +57,7 @@ vim.api.nvim_create_user_command("SakuinClean", function() require("sakuin").cle
 })
 
 vim.api.nvim_create_user_command("SakuinSync", function()
-	if vim.fn.isdirectory(vim.fn.getcwd() .. "/.sakuin") == 0 then
+	if vim.fn.isdirectory(require("sakuin.paths").index_dir(vim.fn.getcwd())) == 0 then
 		vim.notify("[sakuin] No index found. A full index will be built.", vim.log.levels.WARN)
 	end
 	require("sakuin").async_index("update")

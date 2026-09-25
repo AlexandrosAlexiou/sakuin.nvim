@@ -7,6 +7,7 @@
 ---      `uv_async_send` for each.
 ---   4. The async callback drains the queue, checks generation, and dispatches.
 
+--- Docs: https://luajit.org/ext_ffi_api.html
 local ffi = require("ffi")
 
 ffi.cdef([[

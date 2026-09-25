@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tantivy::schema::Schema;
 use tantivy::{Executor, Index, IndexReader, IndexWriter};
 
@@ -22,7 +22,7 @@ pub struct SakuinState {
     pub index: Index,
     pub schema: Schema,
     pub reader: IndexReader,
-    pub writer: Arc<Mutex<IndexWriter>>,
+    pub writer: Arc<RwLock<IndexWriter>>,
     pub config: SakuinConfig,
     pub watcher_handle: Mutex<Option<watcher::WatcherHandle>>,
 }
@@ -36,7 +36,7 @@ pub(crate) fn global_state() -> &'static Mutex<Option<SakuinState>> {
 pub(crate) struct StateSnapshot {
     pub(crate) project_root: PathBuf,
     pub(crate) schema: Schema,
-    pub(crate) writer: Arc<Mutex<IndexWriter>>,
+    pub(crate) writer: Arc<RwLock<IndexWriter>>,
     pub(crate) config: SakuinConfig,
     pub(crate) reader: IndexReader,
 }
@@ -93,7 +93,7 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
         index,
         schema,
         reader,
-        writer: Arc::new(Mutex::new(writer)),
+        writer: Arc::new(RwLock::new(writer)),
         config,
         watcher_handle: Mutex::new(None),
     };
@@ -123,7 +123,7 @@ pub fn shutdown() {
             }
         }
         {
-            let mut writer = state.writer.lock();
+            let mut writer = state.writer.write();
             let _ = writer.commit();
         }
         log::info!("sakuin shut down");

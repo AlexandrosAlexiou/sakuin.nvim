@@ -38,7 +38,7 @@ Commands:
   stats   Print index statistics
 ```
 
-The index is stored in `<root>/.sakuin` by default. Override with `--index-dir`.
+The index is stored under `/nvim/sakuin/` (default `~/.cache/nvim/sakuin/`) in a directory named after the absolute project root with `/` replaced by `%`, which is where the Neovim plugin keeps it too. Override with `--index-dir`.
 
 ### build
 
@@ -50,7 +50,7 @@ Full index rebuild — clears the existing index and re-indexes all files.
 
 ```bash
 sakuin-cli build ~/myproject
-# Indexed 312 file(s) → ~/myproject/.sakuin
+# Indexed 312 file(s) → ~/.cache/nvim/sakuin/%Users%me%myproject
 ```
 
 ### sync

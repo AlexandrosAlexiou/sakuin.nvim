@@ -10,16 +10,13 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
     let mut builder = WalkBuilder::new(project_root);
 
     let use_git = config.respect_gitignore;
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
     builder
         .hidden(true) // always skip hidden files/dirs (e.g. .git/)
         .git_ignore(use_git)
         .git_global(use_git)
         .git_exclude(use_git)
         .ignore(use_git)
-        .threads(threads);
+        .threads(crate::indexing::io_parallelism());
 
     let include_patterns = config.include_patterns.as_deref().unwrap_or(&[]);
     if !config.ignore_patterns.is_empty() || !include_patterns.is_empty() {

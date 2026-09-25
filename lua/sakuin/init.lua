@@ -96,7 +96,7 @@ local function init_engine_async(config, on_ready)
 		end
 
 		local root = vim.fn.getcwd()
-		local index_dir = root .. "/.sakuin"
+		local index_dir = require("sakuin.paths").index_dir(root)
 		local init_ok, init_err = ffi_mod.init(root, index_dir, build_rust_config(config))
 		if not init_ok then
 			vim.notify("[sakuin] Failed to initialize: " .. (init_err or "unknown error"), vim.log.levels.ERROR)
@@ -116,7 +116,7 @@ local function reinit_engine(config)
 	if not ffi_mod.is_loaded() then return end
 
 	local root = vim.fn.getcwd()
-	local index_dir = root .. "/.sakuin"
+	local index_dir = require("sakuin.paths").index_dir(root)
 
 	local ok, reinit_err = ffi_mod.reinit(root, index_dir, build_rust_config(config))
 	if not ok then
@@ -127,10 +127,10 @@ local function reinit_engine(config)
 	if vim.fn.isdirectory(index_dir) == 1 then run_startup_sync(ffi_mod, config) end
 end
 
--- Skips if no .sakuin/ exists (user must :SakuinBuild first).
+-- Skips if the project has no index yet (user must :SakuinBuild first).
 ---@param config table
 local function deferred_startup(config)
-	local index_dir = vim.fn.getcwd() .. "/.sakuin"
+	local index_dir = require("sakuin.paths").index_dir(vim.fn.getcwd())
 	if vim.fn.isdirectory(index_dir) == 0 then return end
 
 	init_engine_async(config, function(ffi_mod)
@@ -241,14 +241,14 @@ function M.async_index(mode)
 	end)
 end
 
---- Delete the .sakuin/ index directory.
+--- Delete the index directory for the current working directory.
 function M.clean()
 	local ffi_mod = require("sakuin.ffi")
 
 	-- Shut down the engine first if running (releases file handles on the index)
 	if ffi_mod.is_loaded() then ffi_mod.shutdown() end
 
-	local index_dir = vim.fn.getcwd() .. "/.sakuin"
+	local index_dir = require("sakuin.paths").index_dir(vim.fn.getcwd())
 	if vim.fn.isdirectory(index_dir) == 1 then
 		vim.fn.delete(index_dir, "rf")
 		vim.notify("[sakuin] Cleaned index at " .. index_dir, vim.log.levels.INFO)

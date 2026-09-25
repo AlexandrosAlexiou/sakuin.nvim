@@ -18,7 +18,8 @@ enum Command {
     Build {
         /// Project root to index.
         root: String,
-        /// Index directory (default: <root>/.sakuin).
+        /// Index directory (default: `/nvim/sakuin/<root with / as %>`,
+        /// the same location the Neovim plugin uses).
         #[arg(long)]
         index_dir: Option<String>,
     },
@@ -66,10 +67,25 @@ enum HeadingWhen {
     Never,
 }
 
+/// Default index location, mirroring `lua/sakuin/paths.lua` so the CLI can
+/// inspect the index the plugin built. Kept outside the project tree so index
+/// writes never trigger git-aware tools watching the repo.
 fn index_dir(root: &str, override_: Option<&str>) -> String {
-    override_
-        .map(String::from)
-        .unwrap_or_else(|| format!("{}/.sakuin", root))
+    if let Some(dir) = override_ {
+        return dir.to_string();
+    }
+    let abs = std::fs::canonicalize(root).unwrap_or_else(|_| std::path::PathBuf::from(root));
+    let name = abs.to_string_lossy().replace('/', "%");
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    cache
+        .join("nvim")
+        .join("sakuin")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn main() {

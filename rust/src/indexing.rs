@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rayon::prelude::*;
 use tantivy::schema::Schema;
 use tantivy::{IndexReader, IndexWriter};
@@ -18,6 +18,15 @@ use crate::walker;
 pub const PROGRESS_RUNNING: u64 = 1;
 pub const PROGRESS_DONE: u64 = 2;
 pub const PROGRESS_ERROR: u64 = 3;
+
+/// Thread count for the I/O-bound phases (directory walk, file reads). These
+/// phases spend their time blocked in `open()`.
+pub(crate) fn io_parallelism() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    (cores * 4).clamp(16, 64)
+}
 
 pub struct Progress {
     pub total: AtomicU64,
@@ -55,11 +64,11 @@ fn emit_progress(total: u64, done: u64, message: Option<&str>) {
 }
 
 pub(crate) fn commit_and_reload(
-    writer: &Mutex<IndexWriter>,
+    writer: &RwLock<IndexWriter>,
     reader: &IndexReader,
 ) -> Result<(), String> {
     writer
-        .lock()
+        .write()
         .commit()
         .map_err(|e| format!("Failed to commit: {}", e))?;
     if let Err(e) = reader.reload() {
@@ -68,14 +77,14 @@ pub(crate) fn commit_and_reload(
     Ok(())
 }
 
-/// Shared rayon indexing loop. Reads each file, briefly locks the writer to
-/// add the doc, emits a progress event every 100 files, and bails on
-/// CANCEL_INDEXING. `on_indexed(is_update)` is called for each success so
-/// callers can split add/update counters.
+/// Shared rayon indexing loop. Reads each file, adds the doc under a shared
+/// read lock (add_document only needs &self), emits a progress event every
+/// 100 files, and bails on CANCEL_INDEXING. `on_indexed(is_update)` is called
+/// for each success so callers can split add/update counters.
 fn run_index_job<F>(
     project_root: &std::path::Path,
     schema: &Schema,
-    writer: &Mutex<IndexWriter>,
+    writer: &RwLock<IndexWriter>,
     files: &[(PathBuf, bool)],
     on_indexed: F,
 ) where
@@ -83,6 +92,43 @@ fn run_index_job<F>(
 {
     let prog = progress();
     let done_counter = AtomicU64::new(0);
+    // Dedicated oversubscribed pool: the work here is dominated by blocking
+    // file reads, not CPU (see `io_parallelism`).
+    let job = || {
+        index_files(
+            project_root,
+            schema,
+            writer,
+            files,
+            &on_indexed,
+            prog,
+            &done_counter,
+        )
+    };
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(io_parallelism())
+        .thread_name(|i| format!("sakuin-read-{i}"))
+        .build()
+    {
+        Ok(pool) => pool.install(job),
+        Err(e) => {
+            log::warn!("Failed to build read pool ({}), using global rayon pool", e);
+            job()
+        }
+    }
+}
+
+fn index_files<F>(
+    project_root: &std::path::Path,
+    schema: &Schema,
+    writer: &RwLock<IndexWriter>,
+    files: &[(PathBuf, bool)],
+    on_indexed: &F,
+    prog: &Progress,
+    done_counter: &AtomicU64,
+) where
+    F: Fn(bool) + Sync,
+{
     files.par_iter().for_each(|(file_path, is_update)| {
         if CANCEL_INDEXING.load(Ordering::Relaxed) {
             return;
@@ -94,7 +140,7 @@ fn run_index_job<F>(
         }
         match index::prepare_doc(project_root, file_path) {
             Ok(doc) => {
-                let w = writer.lock();
+                let w = writer.read();
                 match index::add_prepared_doc(&w, schema, doc) {
                     Ok(()) => on_indexed(*is_update),
                     Err(e) => log::warn!("Failed to index {:?}: {}", file_path, e),
@@ -113,9 +159,9 @@ fn begin_indexing() {
     prog.total.store(0, Ordering::SeqCst);
 }
 
-/// Rayon tasks read files AND call add_document directly with a brief
-/// per-call lock on the IndexWriter. add_document is just a crossbeam
-/// channel send (~100ns) so contention is negligible.
+/// Rayon tasks read files and call add_document directly. Adds only need
+/// &IndexWriter, so they proceed concurrently under the read lock; the write
+/// lock is taken only to commit.
 pub fn build_index() -> Result<u64, String> {
     begin_indexing();
     let s = snapshot()?;
@@ -126,7 +172,7 @@ pub fn build_index() -> Result<u64, String> {
     emit_progress(total, 0, None);
 
     s.writer
-        .lock()
+        .read()
         .delete_all_documents()
         .map_err(|e| format!("Failed to clear index: {}", e))?;
 
@@ -162,7 +208,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 
     let mut removed: u64 = 0;
     {
-        let w = s.writer.lock();
+        let w = s.writer.read();
         for indexed_path in indexed_mtimes.keys() {
             if !disk_set.contains(indexed_path) {
                 index::delete_by_path(&w, &s.schema, indexed_path);
@@ -194,7 +240,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     emit_progress(total, 0, None);
 
     {
-        let w = s.writer.lock();
+        let w = s.writer.read();
         for (path, is_update) in &files_to_index {
             if *is_update {
                 index::delete_by_path(&w, &s.schema, &index::rel_path(&s.project_root, path));
@@ -236,7 +282,7 @@ pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Resu
     let guard = global_state().lock();
     let state = guard.as_ref().ok_or("sakuin not initialized")?;
 
-    let writer = state.writer.lock();
+    let writer = state.writer.read();
     let mut changed = false;
 
     // Removals stay unfiltered so a now-ignored file still gets evicted.

@@ -43,7 +43,7 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 
 ## Getting Started
 
-1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written to `.sakuin/` at your project root(add it to your `.gitignore`, or `.git/info/exclude`).
+1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written under Neovim's cache directory (`:echo stdpath("cache") .. "/sakuin"`), never inside the project tree, so nothing needs to be gitignored and git-aware tools watching the repo are left alone.
 2. Open the search picker with `<leader>si` and start typing. Results stream in as you type.
 3. From that point on, the index is maintained automatically. On startup, changed files are synced. A filesystem watcher keeps it current while you work.
 
@@ -54,7 +54,7 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 - **Incremental indexing**: only changed files are re-indexed on startup, keeping sync fast even on large projects
 - **Live index updates**: a filesystem watcher re-indexes files as you save, with no manual intervention
 - **Respects `.gitignore`**: ignored files, build artifacts, lockfiles, and `node_modules` are skipped automatically
-- **Git-aware change detection**: uses `git status` and `git diff` to precisely identify changed files for incremental updates, avoiding unnecessary filesystem scans
+- **Git-aware change detection**: after a checkout, rebase, or stash, libgit2 (in-process, no `git` subprocesses) computes exactly which files changed so only those are re-indexed
 - **File-based logging**: structured logs written to disk with a built-in log viewer (`:SakuinLogs`) for real-time debugging
 
 ## Configuration

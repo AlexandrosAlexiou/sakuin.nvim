@@ -20,10 +20,12 @@ pub const FIELD_SIZE: &str = "size";
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
 
-    // WithFreqs (no positions): trigrams are never used in phrase queries.
+    // Basic (doc ids only): search collects candidate docs and verifies them
+    // with a line scan, so trigram frequencies and positions are never read.
+    // Dropping them shrinks postings and speeds up indexing and merging.
     let trigram_indexing = TextFieldIndexing::default()
         .set_tokenizer(TRIGRAM_TOKENIZER_NAME)
-        .set_index_option(IndexRecordOption::WithFreqs);
+        .set_index_option(IndexRecordOption::Basic);
     let trigram_text_stored = TextOptions::default()
         .set_indexing_options(trigram_indexing.clone())
         .set_stored();
@@ -50,7 +52,7 @@ pub fn build_schema() -> Schema {
 }
 
 // Bump when schema/tokenizer changes; mismatches trigger a full index wipe+rebuild.
-const SCHEMA_VERSION: &str = "v4";
+const SCHEMA_VERSION: &str = "v5";
 
 pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index_path = index_dir.join("index");
@@ -97,9 +99,23 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     Ok(index)
 }
 
+/// Arena budget per indexing thread. Tantivy flushes a segment whenever a
+/// thread's arena fills, and the trigram tokenizer emits one token per
+/// character, so a small arena means thousands of tiny segments on a large
+/// repo and constant merging. The arena grows on demand, so this is a cap on
+/// peak usage during a build, not a steady-state allocation.
+const WRITER_HEAP_PER_THREAD: usize = 256 * 1024 * 1024;
+
+/// Mirrors tantivy's own cap on indexing threads.
+const WRITER_MAX_THREADS: usize = 8;
+
 pub fn create_writer(index: &Index) -> Result<IndexWriter, String> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(WRITER_MAX_THREADS);
     index
-        .writer(50_000_000)
+        .writer_with_num_threads(threads, threads * WRITER_HEAP_PER_THREAD)
         .map_err(|e| format!("Failed to create IndexWriter: {}", e))
 }
 

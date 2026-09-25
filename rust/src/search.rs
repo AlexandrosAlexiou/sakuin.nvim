@@ -56,7 +56,7 @@ where
                     .map(|&f| {
                         let term = Term::from_field_text(f, tg);
                         let q: Box<dyn tantivy::query::Query> =
-                            Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs));
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic));
                         (Occur::Should, q)
                     })
                     .collect();
