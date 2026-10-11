@@ -1,32 +1,19 @@
-<p align="center">
-  <a href="https://github.com/AlexandrosAlexiou/sakuin.nvim">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/sakuin-dark.jpeg">
-      <source media="(prefers-color-scheme: light)" srcset=".github/assets/sakuin-light.png">
-      <img src=".github/sakuin-light.png" alt="sakuin.nvim banner" width="100%">
-    </picture>
-  </a>
-</p>
+Sakuin &mdash; fast full-text search for Neovim
+==============================================
 
-Sakuin (索引) is a fast full-text search plugin for Neovim, powered by [Tantivy](https://github.com/quickwit-oss/tantivy).
+[<img alt="github" src="https://img.shields.io/badge/github-AlexandrosAlexiou/sakuin.nvim-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/AlexandrosAlexiou/sakuin.nvim)
+[<img alt="release" src="https://img.shields.io/github/v/release/AlexandrosAlexiou/sakuin.nvim?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://github.com/AlexandrosAlexiou/sakuin.nvim/releases)
+[<img alt="neovim" src="https://img.shields.io/badge/neovim-0.10+-66c2a5?style=for-the-badge&labelColor=555555&logo=neovim" height="20">](https://neovim.io)
+[<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/AlexandrosAlexiou/sakuin.nvim/ci.yml?branch=main&style=for-the-badge" height="20">](https://github.com/AlexandrosAlexiou/sakuin.nvim/actions?query=branch%3Amain)
 
-Working on massive codebases, the usual live-grep tools start to drag once a project gets big enough. Sakuin builds a persistent index up front so queries come back in milliseconds, even across hundreds of thousands of files, and streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md) as you type.
+Sakuin (索引) is a fast full-text search plugin for Neovim, powered by
+[Tantivy](https://github.com/quickwit-oss/tantivy).
 
-## Requirements
-
-- **Neovim** >= 0.10
-- **LuaJIT** (standard Lua not supported)
-- [snacks.nvim](https://github.com/folke/snacks.nvim) for the picker UI
-- A prebuilt binary or a **Rust toolchain** to compile from source
-
-
-
-## Installation
-
-> [!WARNING]
-> **Windows is not currently supported.** Neovim does not export `uv_async_send` on Windows, which this plugin requires for thread-safe async notifications. See [neovim/neovim#40307](https://github.com/neovim/neovim/discussions/40307#discussioncomment-17436804) for details.
-
-### [lazy.nvim](https://github.com/folke/lazy.nvim)
+Working on massive codebases, the usual live-grep tools start to drag once a
+project gets big enough. Sakuin builds a persistent index up front so queries
+come back in milliseconds, even across hundreds of thousands of files, and
+streams results into a [snacks.nvim picker](https://github.com/folke/snacks.nvim/blob/main/docs/picker.md)
+as you type.
 
 ```lua
 {
@@ -41,21 +28,70 @@ Working on massive codebases, the usual live-grep tools start to drag once a pro
 }
 ```
 
-## Getting Started
+*Requirements: Neovim 0.10+ on LuaJIT, [snacks.nvim](https://github.com/folke/snacks.nvim), and a prebuilt binary or Rust toolchain*<br>
+*Windows is not currently supported, see [Installation](#installation)*
 
-1. Open a project and run `:SakuinBuild` to create the index for the first time. The index is written under Neovim's cache directory (`:echo stdpath("cache") .. "/sakuin"`), never inside the project tree, so nothing needs to be gitignored and git-aware tools watching the repo are left alone.
-2. Open the search picker with `<leader>si` and start typing. Results stream in as you type.
-3. From that point on, the index is maintained automatically. On startup, changed files are synced. A filesystem watcher keeps it current while you work.
+<br>
 
-## Features
+## Getting started
 
-- **Instant queries at any scale**: the index is built once and queried from disk, so search speed does not depend on project size
-- **Streaming results**: results appear as you type, delivered in batches from a background thread
-- **Incremental indexing**: only changed files are re-indexed on startup, keeping sync fast even on large projects
-- **Live index updates**: a filesystem watcher re-indexes files as you save, with no manual intervention
-- **Respects `.gitignore`**: ignored files, build artifacts, lockfiles, and `node_modules` are skipped automatically
-- **Git-aware change detection**: after a checkout, rebase, or stash, libgit2 (in-process, no `git` subprocesses) computes exactly which files changed so only those are re-indexed
-- **File-based logging**: structured logs written to disk with a built-in log viewer (`:SakuinLogs`) for real-time debugging
+1. Open a project and run `:SakuinBuild` to create the index for the first
+   time. The index is written under Neovim's cache directory
+   (`:echo stdpath("cache") .. "/sakuin"`), never inside the project tree, so
+   nothing needs to be gitignored and git-aware tools watching the repo are
+   left alone.
+2. Open the search picker with `<leader>si` and start typing. Results stream in
+   as you type.
+3. From that point on, the index is maintained automatically. On startup,
+   changed files are synced. A filesystem watcher keeps it current while you
+   work.
+
+<br>
+
+## Overview
+
+The idea is to pay the cost of reading the codebase once. Sakuin walks the
+project, writes every text file into a Tantivy index on disk, and answers
+queries from that index rather than scanning files on every keystroke. Search
+speed therefore does not depend on project size.
+
+- **Instant queries at any scale** &mdash; the index is built once and queried
+  from disk.
+
+- **Streaming results** &mdash; results appear as you type, delivered in
+  batches from a background thread.
+
+- **Incremental indexing** &mdash; only changed files are re-indexed on
+  startup, keeping sync fast even on large projects.
+
+- **Live index updates** &mdash; a filesystem watcher re-indexes files as you
+  save, with no manual intervention.
+
+- **Respects `.gitignore`** &mdash; ignored files, build artifacts, lockfiles,
+  and `node_modules` are skipped automatically.
+
+- **Git-aware change detection** &mdash; after a checkout, rebase, or stash,
+  libgit2 (in-process, no `git` subprocesses) computes exactly which files
+  changed so only those are re-indexed.
+
+- **File-based logging** &mdash; structured logs are written to disk with a
+  built-in log viewer (`:SakuinLogs`) for real-time debugging.
+
+<br>
+
+## Installation
+
+> [!WARNING]
+> **Windows is not currently supported.** Neovim does not export
+> `uv_async_send` on Windows, which this plugin requires for thread-safe async
+> notifications. See [neovim/neovim#40307](https://github.com/neovim/neovim/discussions/40307#discussioncomment-17436804)
+> for details.
+
+With [lazy.nvim](https://github.com/folke/lazy.nvim), use the snippet at the
+top of this page. The `build` step downloads a prebuilt binary, or compiles
+from source if you have a Rust toolchain.
+
+<br>
 
 ## Configuration
 
@@ -114,12 +150,14 @@ require("sakuin").setup({
 })
 ```
 
-### Per-project config (`sakuin.toml`)
+<br>
 
-Drop a `sakuin.toml` at the root of a repo to override the indexing
-settings for that project only. It is meant to be checked into the repo, so
-everyone working on the codebase indexes it the same way — independent of
-their personal `setup()` config.
+## Per-project config
+
+Drop a `sakuin.toml` at the root of a repo to override the indexing settings
+for that project only. It is meant to be checked into the repo, so everyone
+working on the codebase indexes it the same way, independent of their personal
+`setup()` config.
 
 ```toml
 # sakuin.toml — at the project root
@@ -132,48 +170,62 @@ include_extensions = ["go", "lua", "rs"]
 
 This mirrors a VsChromium `vs-chromium-project.txt`: `ignore_patterns` is
 `[SearchableFiles.ignore]` and `include_patterns` is the glob whitelist
-`[SearchableFiles.include]` (gitignore syntax — `*`, `src/**`, `Makefile`
-all work). With `include_patterns` set, only files matching at least one
-pattern are indexed; ignores still apply on top. `include_extensions` is a
+`[SearchableFiles.include]` (gitignore syntax &mdash; `*`, `src/**`,
+`Makefile` all work). With `include_patterns` set, only files matching at least
+one pattern are indexed; ignores still apply on top. `include_extensions` is a
 simpler extension-only shorthand and can be used instead of or alongside it.
 
-Only these five fields are recognized — they are exactly the settings that
-describe *what a project indexes*. Anything else (keymaps, logging, the
+Only these five fields are recognized &mdash; they are exactly the settings
+that describe *what a project indexes*. Anything else (keymaps, logging, the
 filesystem watcher, search debounce) stays in `setup()` since it's a personal
 editor preference, not a property of the repo.
 
 - A field set in `sakuin.toml` **wins** over the same field in `setup()`.
   Fields it doesn't set fall back to `setup()`, then the built-in defaults.
-- Arrays **replace**, they don't merge — `ignore_patterns` in the file fully
+
+- Arrays **replace**, they don't merge: `ignore_patterns` in the file fully
   determines the list.
-- A missing or malformed `sakuin.toml` is a warning (see `:SakuinLogs`), not
-  an error; indexing falls back to the `setup()` config.
+
+- A missing or malformed `sakuin.toml` is a warning (see `:SakuinLogs`), not an
+  error; indexing falls back to the `setup()` config.
+
+<br>
 
 ## Commands
 
-| Command | Description |
-| --- | --- |
-| `:Sakuin [query]` | Open the search picker (optionally with initial query) |
-| `:SakuinCword` | Search word under cursor or visual selection |
-| `:SakuinBuild` | Full index rebuild |
-| `:SakuinClean`      | Stop engine and wipe index                                          |
-| `:SakuinSync` | Incremental index sync |
-| `:SakuinStats` | Show index statistics |
-| `:SakuinLogs [level]` | Open log viewer (optionally set log level, e.g. `:SakuinLogs debug`) |
+<table>
+<tr><th>command</th><th>description</th></tr>
+<tr><td><code>:Sakuin [query]</code></td><td>Open the search picker (optionally with initial query)</td></tr>
+<tr><td><code>:SakuinCword</code></td><td>Search word under cursor or visual selection</td></tr>
+<tr><td><code>:SakuinBuild</code></td><td>Full index rebuild</td></tr>
+<tr><td><code>:SakuinClean</code></td><td>Stop engine and wipe index</td></tr>
+<tr><td><code>:SakuinSync</code></td><td>Incremental index sync</td></tr>
+<tr><td><code>:SakuinStats</code></td><td>Show index statistics</td></tr>
+<tr><td><code>:SakuinLogs [level]</code></td><td>Open log viewer (optionally set log level, e.g. <code>:SakuinLogs debug</code>)</td></tr>
+</table>
+
+<br>
 
 ## Keymaps
 
-| Key | Description |
-| --- | --- |
-| `<leader>si` | Open search picker |
-| `<leader>sW` | Search word under cursor or visual selection |
+<table>
+<tr><th>key</th><th>description</th></tr>
+<tr><td><code>&lt;leader&gt;si</code></td><td>Open search picker</td></tr>
+<tr><td><code>&lt;leader&gt;sW</code></td><td>Search word under cursor or visual selection</td></tr>
+</table>
 
-## Health Check
+<br>
+
+## Health check
 
 ```vim
 :checkhealth sakuin
 ```
 
-## License
+<br>
 
-[MIT](LICENSE)
+#### License
+
+<sup>
+Licensed under the <a href="LICENSE">MIT license</a>.
+</sup>
