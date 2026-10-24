@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 
-use crate::binary_detect::is_likely_binary;
+use crate::binary_detect::binary_by_extension;
 use crate::types::SakuinConfig;
 
 pub(crate) fn extension_allowed(path: &Path, exts: &[String]) -> bool {
@@ -120,7 +120,8 @@ impl PathFilter {
             return false;
         }
 
-        !is_likely_binary(path)
+        // Content sniffing happens in index_file, on the bytes it reads anyway.
+        binary_by_extension(path) != Some(true)
     }
 }
 

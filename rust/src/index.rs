@@ -6,6 +6,7 @@ use tantivy::schema::*;
 use tantivy::tokenizer::TextAnalyzer;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
+use crate::binary_detect::{binary_by_extension, looks_binary};
 use crate::tokenizer::{TrigramTokenizer, TRIGRAM_TOKENIZER_NAME};
 use crate::types::IndexStats;
 
@@ -143,43 +144,52 @@ pub fn rel_path(project_root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|_| format!("{:?} is outside project root {:?}", path, project_root))
 }
 
-pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
+pub fn mtime_secs(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// `modified` comes from the walker's stat so the file isn't stat'ed twice.
+/// Returns `None` for a file whose content turns out to be binary.
+pub fn prepare_doc(
+    project_root: &Path,
+    file_path: &Path,
+    modified: u64,
+) -> Result<Option<PreparedDoc>, String> {
     let relative = rel_path(project_root, file_path)?;
 
     let filename = file_path
         .file_name()
-        .map(|f| f.to_string_lossy().to_string())
+        .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
 
     let extension = file_path
         .extension()
-        .map(|e| e.to_string_lossy().to_string())
+        .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_default();
-
-    let metadata = fs::metadata(file_path)
-        .map_err(|e| format!("Failed to read metadata for {:?}: {}", file_path, e))?;
-
-    let modified = metadata
-        .modified()
-        .map_err(|e| format!("Failed to get mtime for {:?}: {}", file_path, e))?
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let size = metadata.len();
 
     let bytes =
         fs::read(file_path).map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
-    let body = String::from_utf8_lossy(&bytes).into_owned();
+    if binary_by_extension(file_path).is_none() && looks_binary(&bytes) {
+        return Ok(None);
+    }
+    let size = bytes.len() as u64;
+    // Valid UTF-8 (the common case) is moved, not copied.
+    let body = String::from_utf8(bytes)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
 
-    Ok(PreparedDoc {
+    Ok(Some(PreparedDoc {
         relative,
         filename,
         extension,
         body,
         modified,
         size,
-    })
+    }))
 }
 
 pub fn add_prepared_doc(
@@ -217,8 +227,12 @@ pub fn index_file(
     project_root: &Path,
     file_path: &Path,
 ) -> Result<(), String> {
-    let doc = prepare_doc(project_root, file_path)?;
-    add_prepared_doc(writer, schema, doc)
+    let metadata = fs::metadata(file_path)
+        .map_err(|e| format!("Failed to read metadata for {:?}: {}", file_path, e))?;
+    match prepare_doc(project_root, file_path, mtime_secs(&metadata))? {
+        Some(doc) => add_prepared_doc(writer, schema, doc),
+        None => Ok(()),
+    }
 }
 
 pub fn delete_by_path(writer: &IndexWriter, schema: &Schema, relative_path: &str) {
@@ -293,6 +307,21 @@ pub fn compute_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepare_doc_sniffs_unknown_extensions_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        let nul_heavy = [b'a', 0, 0, 0, b'b'];
+        std::fs::write(r.join("blob.xyz"), nul_heavy).unwrap();
+        std::fs::write(r.join("odd.rs"), nul_heavy).unwrap();
+        std::fs::write(r.join("latin1.xyz"), b"caf\xe9").unwrap();
+
+        assert!(prepare_doc(r, &r.join("blob.xyz"), 0).unwrap().is_none());
+        assert!(prepare_doc(r, &r.join("odd.rs"), 0).unwrap().is_some());
+        let doc = prepare_doc(r, &r.join("latin1.xyz"), 7).unwrap().unwrap();
+        assert_eq!((doc.body.as_str(), doc.modified), ("caf\u{fffd}", 7));
+    }
 
     #[test]
     fn second_writer_on_same_index_is_refused() {

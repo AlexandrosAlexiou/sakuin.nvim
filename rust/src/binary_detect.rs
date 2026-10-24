@@ -1,37 +1,22 @@
 use std::path::Path;
 
-pub fn is_likely_binary(path: &Path) -> bool {
-    use std::fs::File;
-    use std::io::Read;
-
-    if let Some(ext) = path.extension() {
-        let ext = ext.to_string_lossy().to_lowercase();
-        if BINARY_EXTENSIONS.contains(&ext.as_str()) {
-            return true;
-        }
-        if TEXT_EXTENSIONS.contains(&ext.as_str()) {
-            return false;
-        }
+/// Decides by extension alone; `None` means the content must be sniffed.
+pub fn binary_by_extension(path: &Path) -> Option<bool> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    if BINARY_EXTENSIONS.contains(&ext.as_str()) {
+        Some(true)
+    } else if TEXT_EXTENSIONS.contains(&ext.as_str()) {
+        Some(false)
+    } else {
+        None
     }
+}
 
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return true,
-    };
-
-    let mut buffer = [0u8; 8192];
-    let bytes_read = match file.read(&mut buffer) {
-        Ok(n) => n,
-        Err(_) => return true,
-    };
-
-    if bytes_read == 0 {
-        return false;
-    }
-
-    let null_count = buffer[..bytes_read].iter().filter(|&&b| b == 0).count();
-    // More than 0.3% nulls → treat as binary
-    null_count * 1000 > bytes_read * 3
+/// More than 0.3% NUL bytes in the first 8 KB → binary.
+pub fn looks_binary(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(8192)];
+    let null_count = head.iter().filter(|&&b| b == 0).count();
+    null_count * 1000 > head.len() * 3
 }
 
 static BINARY_EXTENSIONS: &[&str] = &[

@@ -12,9 +12,11 @@ pub struct TrigramTokenizer {
 
 pub struct TrigramTokenStream<'a> {
     text: &'a str,
-    /// Byte offset of each char start, plus `text.len()` as a sentinel.
-    char_offsets: Vec<usize>,
-    index: usize,
+    chars: std::str::CharIndices<'a>,
+    /// Byte offsets of the next trigram's three chars.
+    window: [usize; 3],
+    exhausted: bool,
+    position: usize,
     token: &'a mut Token,
 }
 
@@ -23,12 +25,21 @@ impl Tokenizer for TrigramTokenizer {
 
     fn token_stream<'a>(&'a mut self, text: &'a str) -> TrigramTokenStream<'a> {
         self.token.reset();
-        let mut char_offsets: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
-        char_offsets.push(text.len());
+        let mut chars = text.char_indices();
+        let mut window = [0; 3];
+        let mut exhausted = false;
+        for slot in &mut window {
+            match chars.next() {
+                Some((b, _)) => *slot = b,
+                None => exhausted = true,
+            }
+        }
         TrigramTokenStream {
             text,
-            char_offsets,
-            index: 0,
+            chars,
+            window,
+            exhausted,
+            position: 0,
             token: &mut self.token,
         }
     }
@@ -36,19 +47,25 @@ impl Tokenizer for TrigramTokenizer {
 
 impl<'a> TokenStream for TrigramTokenStream<'a> {
     fn advance(&mut self) -> bool {
-        if self.index + 3 >= self.char_offsets.len() {
+        if self.exhausted {
             return false;
         }
-        let from = self.char_offsets[self.index];
-        let to = self.char_offsets[self.index + 3];
+        let from = self.window[0];
+        let to = match self.chars.next() {
+            Some((b, _)) => b,
+            None => {
+                self.exhausted = true;
+                self.text.len()
+            }
+        };
+        self.window = [self.window[1], self.window[2], to];
         self.token.text.clear();
         self.token.text.push_str(&self.text[from..to]);
-        // Must match `query_trigrams` exactly, correctness invariant.
         self.token.text.make_ascii_lowercase();
         self.token.offset_from = from;
         self.token.offset_to = to;
-        self.token.position = self.index;
-        self.index += 1;
+        self.token.position = self.position;
+        self.position += 1;
         true
     }
 
@@ -61,19 +78,15 @@ impl<'a> TokenStream for TrigramTokenStream<'a> {
     }
 }
 
-/// Returns an empty vec for inputs shorter than 3 chars; callers must fall
-/// back to another retrieval strategy (typically `AllQuery`).
+/// Query-side trigrams, produced by the index tokenizer itself so the two can
+/// never disagree. Returns an empty vec for inputs shorter than 3 chars;
+/// callers must fall back to another retrieval strategy (typically `AllQuery`).
 pub fn query_trigrams(text: &str) -> Vec<String> {
-    let mut char_offsets: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
-    char_offsets.push(text.len());
-    if char_offsets.len() < 4 {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(char_offsets.len() - 3);
-    for i in 0..char_offsets.len() - 3 {
-        let mut tg = text[char_offsets[i]..char_offsets[i + 3]].to_string();
-        tg.make_ascii_lowercase();
-        out.push(tg);
+    let mut tokenizer = TrigramTokenizer::default();
+    let mut stream = tokenizer.token_stream(text);
+    let mut out = Vec::new();
+    while stream.advance() {
+        out.push(stream.token().text.clone());
     }
     out
 }
@@ -144,6 +157,18 @@ mod tests {
         assert!(query_trigrams("a").is_empty());
         assert!(query_trigrams("ab").is_empty());
         assert_eq!(query_trigrams("abc"), vec!["abc"]);
+    }
+
+    #[test]
+    fn test_positions_and_multibyte_offsets() {
+        let mut tokenizer = TrigramTokenizer::default();
+        let mut stream = tokenizer.token_stream("héllo");
+        let mut got = Vec::new();
+        while stream.advance() {
+            let t = stream.token();
+            got.push((t.position, t.offset_from, t.offset_to));
+        }
+        assert_eq!(got, vec![(0, 0, 4), (1, 1, 5), (2, 3, 6)]);
     }
 
     #[test]

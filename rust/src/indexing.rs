@@ -105,7 +105,7 @@ fn run_index_job<F>(
     project_root: &std::path::Path,
     schema: &Schema,
     writer: &RwLock<IndexWriter>,
-    files: &[(PathBuf, bool)],
+    files: &[(PathBuf, u64, bool)],
     on_indexed: F,
 ) where
     F: Fn(bool) + Sync,
@@ -142,33 +142,36 @@ fn index_files<F>(
     project_root: &std::path::Path,
     schema: &Schema,
     writer: &RwLock<IndexWriter>,
-    files: &[(PathBuf, bool)],
+    files: &[(PathBuf, u64, bool)],
     on_indexed: &F,
     prog: &Progress,
     done_counter: &AtomicU64,
 ) where
     F: Fn(bool) + Sync,
 {
-    files.par_iter().for_each(|(file_path, is_update)| {
-        if is_cancelled() {
-            return;
-        }
-        let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        prog.done.store(count, Ordering::Relaxed);
-        if count.is_multiple_of(100) {
-            emit_progress(prog.total.load(Ordering::Relaxed), count, None);
-        }
-        match index::prepare_doc(project_root, file_path) {
-            Ok(doc) => {
-                let w = writer.read();
-                match index::add_prepared_doc(&w, schema, doc) {
-                    Ok(()) => on_indexed(*is_update),
-                    Err(e) => log::warn!("Failed to index {:?}: {}", file_path, e),
-                }
+    files
+        .par_iter()
+        .for_each(|(file_path, modified, is_update)| {
+            if is_cancelled() {
+                return;
             }
-            Err(e) => log::warn!("Failed to read {:?}: {}", file_path, e),
-        }
-    });
+            let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            prog.done.store(count, Ordering::Relaxed);
+            if count.is_multiple_of(100) {
+                emit_progress(prog.total.load(Ordering::Relaxed), count, None);
+            }
+            match index::prepare_doc(project_root, file_path, *modified) {
+                Ok(None) => {}
+                Ok(Some(doc)) => {
+                    let w = writer.read();
+                    match index::add_prepared_doc(&w, schema, doc) {
+                        Ok(()) => on_indexed(*is_update),
+                        Err(e) => log::warn!("Failed to index {:?}: {}", file_path, e),
+                    }
+                }
+                Err(e) => log::warn!("Failed to read {:?}: {}", file_path, e),
+            }
+        });
 }
 
 fn begin_indexing() {
@@ -196,7 +199,7 @@ pub fn build_index() -> Result<u64, String> {
         .map_err(|e| format!("Failed to clear index: {}", e))?;
 
     let indexed = AtomicU64::new(0);
-    let files: Vec<(PathBuf, bool)> = files.into_iter().map(|p| (p, false)).collect();
+    let files: Vec<(PathBuf, u64, bool)> = files.into_iter().map(|(p, m)| (p, m, false)).collect();
     run_index_job(&s.project_root, &s.schema, &s.writer, &files, |_| {
         indexed.fetch_add(1, Ordering::Relaxed);
     });
@@ -221,7 +224,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 
     let disk_set: HashSet<String> = files_on_disk
         .iter()
-        .filter_map(|p| index::rel_path(&s.project_root, p).ok())
+        .filter_map(|(p, _)| index::rel_path(&s.project_root, p).ok())
         .collect();
 
     let mut removed: u64 = 0;
@@ -235,19 +238,13 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         }
     }
 
-    let files_to_index: Vec<(PathBuf, bool)> = files_on_disk
+    let files_to_index: Vec<(PathBuf, u64, bool)> = files_on_disk
         .into_iter()
-        .filter_map(|file_path| {
+        .filter_map(|(file_path, disk_mtime)| {
             let rel = index::rel_path(&s.project_root, &file_path).ok()?;
-            let disk_mtime = std::fs::metadata(&file_path)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
             match indexed_mtimes.get(&rel) {
-                None => Some((file_path, false)),
-                Some(&stored) if disk_mtime != stored => Some((file_path, true)),
+                None => Some((file_path, disk_mtime, false)),
+                Some(&stored) if disk_mtime != stored => Some((file_path, disk_mtime, true)),
                 _ => None,
             }
         })
@@ -259,7 +256,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 
     {
         let w = s.writer.read();
-        for (path, is_update) in &files_to_index {
+        for (path, _, is_update) in &files_to_index {
             if *is_update {
                 index::delete_by_path(&w, &s.schema, &index::rel_path(&s.project_root, path)?);
             }

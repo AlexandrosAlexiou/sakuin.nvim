@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 use parking_lot::Mutex;
 
-use crate::binary_detect::is_likely_binary;
+use crate::binary_detect::binary_by_extension;
 use crate::types::SakuinConfig;
 
-pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> {
+/// Returns each indexable file with its mtime (see [`crate::index::mtime_secs`]).
+/// Content-based binary detection happens later, on the bytes the indexer reads.
+pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<(PathBuf, u64)> {
     let mut builder = WalkBuilder::new(project_root);
 
     let use_git = config.respect_gitignore;
@@ -36,13 +38,12 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
         }
     }
 
-    let files: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let files: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
     let max_file_size = config.max_file_size;
-    let include_extensions = config.include_extensions.clone();
+    let include_extensions = &config.include_extensions;
 
     builder.build_parallel().run(|| {
         let files = &files;
-        let include_extensions = &include_extensions;
         Box::new(move |entry| {
             if crate::indexing::is_cancelled() {
                 return ignore::WalkState::Quit;
@@ -56,27 +57,29 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
                 return ignore::WalkState::Continue;
             }
 
-            // Use the metadata the ignore crate already fetched from the directory
-            // scan — avoids an extra stat(2) syscall per file.
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.len() > max_file_size {
+            let path = entry.path();
+
+            if let Some(exts) = include_extensions {
+                if !crate::path_filter::extension_allowed(path, exts) {
                     return ignore::WalkState::Continue;
                 }
             }
 
-            let path = entry.path().to_path_buf();
-
-            if let Some(ref exts) = include_extensions {
-                if !crate::path_filter::extension_allowed(&path, exts) {
-                    return ignore::WalkState::Continue;
-                }
-            }
-
-            if is_likely_binary(&path) {
+            if binary_by_extension(path) == Some(true) {
                 return ignore::WalkState::Continue;
             }
 
-            files.lock().push(path);
+            // The one stat per file; its mtime is reused by the indexer.
+            let Ok(metadata) = entry.metadata() else {
+                return ignore::WalkState::Continue;
+            };
+            if metadata.len() > max_file_size {
+                return ignore::WalkState::Continue;
+            }
+
+            files
+                .lock()
+                .push((path.to_path_buf(), crate::index::mtime_secs(&metadata)));
             ignore::WalkState::Continue
         })
     });
@@ -98,7 +101,7 @@ mod tests {
     fn names(root: &Path, cfg: &SakuinConfig) -> Vec<String> {
         let mut v: Vec<String> = walk_project(root, cfg)
             .iter()
-            .map(|p| {
+            .map(|(p, _)| {
                 p.strip_prefix(root)
                     .unwrap()
                     .to_string_lossy()
