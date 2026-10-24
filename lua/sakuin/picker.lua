@@ -6,10 +6,8 @@ local M = {}
 ---@param opts? snacks.picker.Config
 function M.sakuin(opts)
 	opts = opts or {}
-	local config = sakuin_config.get()
-	local search_config = config.search or {}
-	local search_limit = search_config.limit or 10000
-	local search_debounce = search_config.debounce or 150
+	local search_limit = sakuin_config.get().search.limit
+	local search_debounce = sakuin_config.get().search.debounce
 
 	local generation = 0
 

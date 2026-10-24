@@ -19,8 +19,7 @@ local level_hl = {
 
 ---@return string
 local function log_file_path()
-	local config = require("sakuin.config").get()
-	return config.log_file or (vim.fn.stdpath("state") .. "/sakuin.log")
+	return require("sakuin.config").get().log_file
 end
 
 ---@return string[]

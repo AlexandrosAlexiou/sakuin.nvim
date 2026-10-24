@@ -89,7 +89,7 @@ end
 
 ---@return string|nil triple e.g. "x86_64-unknown-linux-gnu"
 function M.detect_triple()
-	local uname = (vim.uv or vim.loop).os_uname()
+	local uname = vim.uv.os_uname()
 	local sys = uname.sysname or ""
 	local arch = detect_arch()
 	if not arch then return nil end
@@ -245,7 +245,7 @@ function M.download_impl(run, version)
 		return false, "checksum verification failed: " .. (err or "unknown")
 	end
 
-	local rn_ok, rn_err = (vim.uv or vim.loop).fs_rename(dest_tmp, dest)
+	local rn_ok, rn_err = vim.uv.fs_rename(dest_tmp, dest)
 	if not rn_ok then
 		os.remove(dest_tmp)
 		return false, "rename failed: " .. tostring(rn_err or "unknown")

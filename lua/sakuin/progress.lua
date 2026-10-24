@@ -4,7 +4,7 @@ M.is_indexing = false
 
 local function is_enabled()
 	local config = require("sakuin.config").get()
-	return not config.progress or config.progress.enabled ~= false
+	return config.progress and config.progress.enabled
 end
 
 ---@param label string

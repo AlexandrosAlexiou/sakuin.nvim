@@ -79,7 +79,7 @@ function M.cleanup_stale()
 	local keep = M.versioned_name()
 	local keep_sidecar = keep .. ".sha256"
 
-	local uv = vim.uv or vim.loop
+	local uv = vim.uv
 	local dir = M.build_dir()
 	local handle = uv.fs_scandir(dir)
 	if not handle then return end

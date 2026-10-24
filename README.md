@@ -110,7 +110,7 @@ require("sakuin").setup({
 
   -- Patterns to ignore (on top of .gitignore)
   ignore_patterns = {
-    "node_modules", ".git", "target", "dist", "build",
+    "node_modules", "target", "dist", "build",
     "*.min.js", "*.map", "package-lock.json", "yarn.lock",
   },
 
@@ -202,6 +202,7 @@ editor preference, not a property of the repo.
 <tr><td><code>:SakuinSync</code></td><td>Incremental index sync</td></tr>
 <tr><td><code>:SakuinStats</code></td><td>Show index statistics</td></tr>
 <tr><td><code>:SakuinLogs [level]</code></td><td>Open log viewer (optionally set log level, e.g. <code>:SakuinLogs debug</code>)</td></tr>
+<tr><td><code>:SakuinLogs clear</code></td><td>Truncate the log file</td></tr>
 </table>
 
 <br>

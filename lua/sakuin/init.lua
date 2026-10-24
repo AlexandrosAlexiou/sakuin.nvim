@@ -9,11 +9,11 @@ end
 local function build_rust_config(config)
 	return vim.json.encode({
 		max_file_size = config.max_file_size,
-		ignore_patterns = config.ignore_patterns or {},
+		ignore_patterns = config.ignore_patterns,
 		include_patterns = config.include_patterns,
 		include_extensions = config.include_extensions,
-		respect_gitignore = config.respect_gitignore ~= false,
-		log_level = config.log_level or "info",
+		respect_gitignore = config.respect_gitignore,
+		log_level = config.log_level,
 		log_file = config.log_file,
 	})
 end
@@ -141,6 +141,7 @@ end
 
 ---@class sakuin.Config.Search
 ---@field limit? integer Max total results (0 = unlimited)
+---@field debounce? integer Idle ms after the last keystroke before searching
 
 ---@class sakuin.Config.Progress
 ---@field enabled? boolean
@@ -170,8 +171,11 @@ end
 ---@param opts? sakuin.Config
 function M.setup(opts)
 	local config = require("sakuin.config").apply(opts or {})
+	-- Cleared so calling setup() again replaces the autocmds instead of stacking them.
+	local group = vim.api.nvim_create_augroup("sakuin", { clear = true })
 
 	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
 		callback = function()
 			local ffi_mod = require("sakuin.ffi")
 			if ffi_mod.is_loaded() then ffi_mod.shutdown() end
@@ -180,6 +184,7 @@ function M.setup(opts)
 	})
 
 	vim.api.nvim_create_autocmd("DirChanged", {
+		group = group,
 		callback = function()
 			local ffi_mod = require("sakuin.ffi")
 			if ffi_mod.is_loaded() then
@@ -202,11 +207,13 @@ function M.setup(opts)
 				"<cmd>SakuinCword<cr>",
 				{ desc = "Sakuin search word under cursor" }
 			)
-			vim.keymap.set("x", config.keymaps.search_cword, function()
-				vim.cmd('noautocmd normal! "vy')
-				local text = vim.fn.getreg("v")
-				if text and text ~= "" then require("sakuin.picker").sakuin({ search = text }) end
-			end, { desc = "Sakuin search visual selection" })
+			-- ":" passes the '<,'> range, so :SakuinCword reads the selection after its preflight.
+			vim.keymap.set(
+				"x",
+				config.keymaps.search_cword,
+				":SakuinCword<cr>",
+				{ silent = true, desc = "Sakuin search visual selection" }
+			)
 		end
 		if config.keymaps.rebuild then
 			vim.keymap.set("n", config.keymaps.rebuild, "<cmd>SakuinBuild<cr>", { desc = "Sakuin rebuild index" })

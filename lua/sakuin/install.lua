@@ -61,7 +61,7 @@ local function build_impl(run)
 	local src = rust_dir .. "/target/release/" .. binary.unversioned_name()
 	local dest = binary.versioned_path()
 	if vim.fn.filereadable(dest) == 1 then os.remove(dest) end
-	if not (vim.uv or vim.loop).fs_copyfile(src, dest) then return false, "failed to copy " .. src .. " to " .. dest end
+	if not vim.uv.fs_copyfile(src, dest) then return false, "failed to copy " .. src .. " to " .. dest end
 	-- Ad-hoc re-sign on macOS so the kernel accepts the freshly written dylib.
 	if jit.os == "OSX" then run({ "codesign", "-s", "-", "-f", dest }) end
 	return true

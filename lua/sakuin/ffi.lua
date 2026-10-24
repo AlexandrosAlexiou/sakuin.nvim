@@ -187,8 +187,9 @@ local function decode_indexing_event(ptr)
 	return event
 end
 
+-- Already on the main loop (on_async_notification runs from vim.schedule).
 local function report_callback_error(err)
-	vim.schedule(function() vim.notify("[sakuin] callback error: " .. tostring(err), vim.log.levels.ERROR) end)
+	vim.notify("[sakuin] callback error: " .. tostring(err), vim.log.levels.ERROR)
 end
 
 local function dispatch_search_msg(msg)
@@ -312,11 +313,7 @@ end
 function M.reinit(project_root, index_dir, config_json)
 	M.shutdown()
 	setup_async_handle()
-
-	local err = status_to_err(get_lib().sakuin_init(project_root, index_dir, config_json))
-	if err then return false, err end
-	initialized = true
-	return true, nil
+	return M.init(project_root, index_dir, config_json)
 end
 
 ---@return boolean ok

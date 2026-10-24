@@ -47,7 +47,6 @@ M.defaults = {
 	keymaps = {
 		search = "<leader>si",
 		search_cword = "<leader>sW",
-		rebuild = nil,
 	},
 }
 

@@ -1,12 +1,9 @@
 if vim.g.loaded_sakuin then return end
 vim.g.loaded_sakuin = true
 
+-- Ranged commands run after visual mode ends, so the '< '> marks are current.
 local function get_visual_selection()
-	-- Exit visual mode to update '< and '> marks
-	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
-	local start_pos = vim.api.nvim_buf_get_mark(0, "<")
-	local end_pos = vim.api.nvim_buf_get_mark(0, ">")
-	local lines = vim.api.nvim_buf_get_text(0, start_pos[1] - 1, start_pos[2], end_pos[1] - 1, end_pos[2] + 1, {})
+	local lines = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"), { type = vim.fn.visualmode() })
 	return table.concat(lines, " ")
 end
 
