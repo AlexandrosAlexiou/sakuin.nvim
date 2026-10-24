@@ -37,7 +37,7 @@ jobs:
 
       - name: cargo clippy
         if: matrix.check == 'clippy'
-        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: cargo fmt
         if: matrix.check == 'fmt'

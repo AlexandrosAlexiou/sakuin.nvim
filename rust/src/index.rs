@@ -12,11 +12,8 @@ use crate::types::IndexStats;
 
 pub const FIELD_PATH: &str = "path";
 pub const FIELD_PATH_EXACT: &str = "path_exact";
-pub const FIELD_FILENAME: &str = "filename";
-pub const FIELD_EXTENSION: &str = "extension";
 pub const FIELD_BODY: &str = "body";
 pub const FIELD_MODIFIED: &str = "modified";
-pub const FIELD_SIZE: &str = "size";
 
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
@@ -32,28 +29,23 @@ pub fn build_schema() -> Schema {
         .set_stored();
     let trigram_text = TextOptions::default().set_indexing_options(trigram_indexing);
 
-    builder.add_text_field(FIELD_PATH, trigram_text_stored.clone());
+    builder.add_text_field(FIELD_PATH, trigram_text_stored);
 
     // Exact (untokenized) copy of the path, used for delete-by-path and
     // mtime lookups. STRING = exact match, STORED so we can read it back.
     builder.add_text_field(FIELD_PATH_EXACT, STRING | STORED);
 
-    builder.add_text_field(FIELD_FILENAME, trigram_text_stored);
-
-    builder.add_text_field(FIELD_EXTENSION, STRING | STORED);
-
     // Body is not stored (too large).
     builder.add_text_field(FIELD_BODY, trigram_text);
 
-    builder.add_u64_field(FIELD_MODIFIED, STORED | FAST);
-
-    builder.add_u64_field(FIELD_SIZE, STORED | FAST);
+    // Nanoseconds since the epoch, read back from the doc store by update_index.
+    builder.add_u64_field(FIELD_MODIFIED, STORED);
 
     builder.build()
 }
 
 // Bump when schema/tokenizer changes; mismatches trigger a full index wipe+rebuild.
-const SCHEMA_VERSION: &str = "v5";
+const SCHEMA_VERSION: &str = "v6";
 
 pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     let index_path = index_dir.join("index");
@@ -131,11 +123,8 @@ pub fn create_reader(index: &Index) -> Result<IndexReader, String> {
 // can run in parallel (Rayon) while the writer is touched only briefly.
 pub struct PreparedDoc {
     pub relative: String,
-    pub filename: String,
-    pub extension: String,
     pub body: String,
     pub modified: u64,
-    pub size: u64,
 }
 
 pub fn rel_path(project_root: &Path, path: &Path) -> Result<String, String> {
@@ -144,12 +133,14 @@ pub fn rel_path(project_root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|_| format!("{:?} is outside project root {:?}", path, project_root))
 }
 
-pub fn mtime_secs(metadata: &fs::Metadata) -> u64 {
+/// Nanosecond precision, so an edit within the same second as the last
+/// index still registers as a change.
+pub fn mtime_nanos(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0)
 }
 
@@ -161,34 +152,19 @@ pub fn prepare_doc(
     modified: u64,
 ) -> Result<Option<PreparedDoc>, String> {
     let relative = rel_path(project_root, file_path)?;
-
-    let filename = file_path
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    let extension = file_path
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
     let bytes =
         fs::read(file_path).map_err(|e| format!("Failed to read {:?}: {}", file_path, e))?;
     if binary_by_extension(file_path).is_none() && looks_binary(&bytes) {
         return Ok(None);
     }
-    let size = bytes.len() as u64;
     // Valid UTF-8 (the common case) is moved, not copied.
     let body = String::from_utf8(bytes)
         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
 
     Ok(Some(PreparedDoc {
         relative,
-        filename,
-        extension,
         body,
         modified,
-        size,
     }))
 }
 
@@ -199,21 +175,15 @@ pub fn add_prepared_doc(
 ) -> Result<(), String> {
     let path_field = schema.get_field(FIELD_PATH).unwrap();
     let path_exact_field = schema.get_field(FIELD_PATH_EXACT).unwrap();
-    let filename_field = schema.get_field(FIELD_FILENAME).unwrap();
-    let extension_field = schema.get_field(FIELD_EXTENSION).unwrap();
     let body_field = schema.get_field(FIELD_BODY).unwrap();
     let modified_field = schema.get_field(FIELD_MODIFIED).unwrap();
-    let size_field = schema.get_field(FIELD_SIZE).unwrap();
 
     writer
         .add_document(doc!(
             path_field => doc.relative.clone(),
             path_exact_field => doc.relative,
-            filename_field => doc.filename,
-            extension_field => doc.extension,
             body_field => doc.body,
             modified_field => doc.modified,
-            size_field => doc.size,
         ))
         .map_err(|e| format!("Failed to add document: {}", e))?;
 
@@ -229,7 +199,7 @@ pub fn index_file(
 ) -> Result<(), String> {
     let metadata = fs::metadata(file_path)
         .map_err(|e| format!("Failed to read metadata for {:?}: {}", file_path, e))?;
-    match prepare_doc(project_root, file_path, mtime_secs(&metadata))? {
+    match prepare_doc(project_root, file_path, mtime_nanos(&metadata))? {
         Some(doc) => add_prepared_doc(writer, schema, doc),
         None => Ok(()),
     }

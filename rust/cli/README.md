@@ -8,10 +8,10 @@ From the `rust/` directory:
 
 ```bash
 # debug build (fast compile, slower binary)
-cargo build --bin sakuin-cli
+cargo build --features cli --bin sakuin-cli
 
 # release build (slow compile, optimised)
-cargo build --bin sakuin-cli --release
+cargo build --features cli --bin sakuin-cli --release
 ```
 
 Binaries land at:
@@ -21,7 +21,7 @@ Binaries land at:
 To install system-wide:
 
 ```bash
-cargo install --path . --bin sakuin-cli
+cargo install --path . --features cli --bin sakuin-cli
 ```
 
 This copies the binary to `~/.cargo/bin/sakuin-cli`, which is on your `$PATH` with a standard Rust installation.

@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SearchResult {
     pub path: String,
     pub line: u32,
@@ -9,7 +9,7 @@ pub struct SearchResult {
     pub score: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct IndexStats {
     pub num_docs: u64,
     pub num_segments: usize,
@@ -17,7 +17,7 @@ pub struct IndexStats {
     pub project_root: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SakuinConfig {
     pub max_file_size: u64,
     pub ignore_patterns: Vec<String>,

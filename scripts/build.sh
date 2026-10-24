@@ -53,7 +53,7 @@ build_lib() {
 
 build_cli() {
 	echo "Building sakuin-cli..."
-	cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --bin sakuin-cli
+	cargo build --manifest-path "$RUST_DIR/Cargo.toml" --release --features cli --bin sakuin-cli
 
 	mkdir -p "$BUILD_DIR"
 	cp "$RUST_DIR/target/release/sakuin-cli" "$BUILD_DIR/"

@@ -16,10 +16,6 @@ use crate::index;
 use crate::state::snapshot;
 use crate::walker;
 
-pub const PROGRESS_RUNNING: u64 = 1;
-pub const PROGRESS_DONE: u64 = 2;
-pub const PROGRESS_ERROR: u64 = 3;
-
 /// Thread count for the I/O-bound phases (directory walk, file reads). These
 /// phases spend their time blocked in `open()`.
 pub(crate) fn io_parallelism() -> usize {
@@ -32,7 +28,6 @@ pub(crate) fn io_parallelism() -> usize {
 pub struct Progress {
     pub total: AtomicU64,
     pub done: AtomicU64,
-    pub status: AtomicU64,
 }
 
 static PROGRESS: OnceLock<Progress> = OnceLock::new();
@@ -45,7 +40,6 @@ pub fn progress() -> &'static Progress {
     PROGRESS.get_or_init(|| Progress {
         total: AtomicU64::new(0),
         done: AtomicU64::new(0),
-        status: AtomicU64::new(0),
     })
 }
 
@@ -176,7 +170,6 @@ fn index_files<F>(
 
 fn begin_indexing() {
     let prog = progress();
-    prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
     prog.done.store(0, Ordering::SeqCst);
     prog.total.store(0, Ordering::SeqCst);
 }
@@ -205,7 +198,6 @@ pub fn build_index() -> Result<u64, String> {
     });
 
     commit_and_reload(&s.writer, &s.reader)?;
-    progress().status.store(PROGRESS_DONE, Ordering::SeqCst);
 
     let indexed = indexed.load(Ordering::Relaxed);
     log::info!("Full index build complete: {} files indexed", indexed);
@@ -280,7 +272,6 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     );
 
     commit_and_reload(&s.writer, &s.reader)?;
-    progress().status.store(PROGRESS_DONE, Ordering::SeqCst);
 
     let added = added.load(Ordering::Relaxed);
     let updated = updated.load(Ordering::Relaxed);

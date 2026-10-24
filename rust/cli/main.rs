@@ -89,10 +89,8 @@ fn index_dir(root: &str, override_: Option<&str>) -> String {
 }
 
 fn main() {
-    // Show warnings from the library; suppress noisy debug/info logs.
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Warn)
-        .init();
+    // Warnings by default; RUST_LOG still overrides.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let cli = Cli::parse();
 

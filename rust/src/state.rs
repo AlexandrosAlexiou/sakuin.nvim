@@ -171,7 +171,7 @@ pub fn start_watcher() -> Result<(), String> {
         return Err("Watcher already running".into());
     }
 
-    let handle = watcher::start_watching(&state.project_root, &state.index_dir)?;
+    let handle = watcher::start_watching(&state.project_root)?;
 
     *watcher_guard = Some(handle);
     log::info!("File watcher started");

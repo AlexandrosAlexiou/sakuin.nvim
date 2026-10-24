@@ -11,7 +11,7 @@ use tantivy::query::{AllQuery, BooleanQuery, Occur, TermQuery};
 use tantivy::schema::{IndexRecordOption, Schema, Value};
 use tantivy::{Executor, IndexReader, TantivyDocument, Term};
 
-use crate::index::{FIELD_BODY, FIELD_FILENAME, FIELD_PATH};
+use crate::index::{FIELD_BODY, FIELD_PATH};
 use crate::tokenizer::query_trigrams;
 use crate::types::SearchResult;
 
@@ -41,8 +41,8 @@ where
 
     let body_field = params.schema.get_field(FIELD_BODY).unwrap();
     let path_field = params.schema.get_field(FIELD_PATH).unwrap();
-    let filename_field = params.schema.get_field(FIELD_FILENAME).unwrap();
-    let fields = [body_field, path_field, filename_field];
+    // No filename field: a filename is a suffix of its path.
+    let fields = [body_field, path_field];
 
     let trigrams = query_trigrams(&needle);
     let tantivy_query: Box<dyn tantivy::query::Query> = if trigrams.is_empty() {

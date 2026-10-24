@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use crate::binary_detect::binary_by_extension;
 use crate::types::SakuinConfig;
 
-/// Returns each indexable file with its mtime (see [`crate::index::mtime_secs`]).
+/// Returns each indexable file with its mtime (see [`crate::index::mtime_nanos`]).
 /// Content-based binary detection happens later, on the bytes the indexer reads.
 pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<(PathBuf, u64)> {
     let mut builder = WalkBuilder::new(project_root);
@@ -79,7 +79,7 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<(PathBuf,
 
             files
                 .lock()
-                .push((path.to_path_buf(), crate::index::mtime_secs(&metadata)));
+                .push((path.to_path_buf(), crate::index::mtime_nanos(&metadata)));
             ignore::WalkState::Continue
         })
     });

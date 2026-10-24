@@ -1,3 +1,4 @@
+use sakuin::internal::SearchResult;
 use std::ffi::CString;
 use std::fs;
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -96,33 +97,23 @@ fn init_only(project: &TempDir) {
 }
 
 fn init_and_build(project: &TempDir) {
-    let root = project.path();
-    let index_dir = root.join(".sakuin");
-
-    let c_root = CString::new(root.to_str().unwrap()).unwrap();
-    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
-
-    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null())
-        .into_result()
-        .expect("sakuin_init should succeed");
-
+    init_only(project);
     sakuin::internal::build_index().expect("build_index should succeed");
 }
 
-/// Test helper: synchronous search, returns parsed JSON results.
-fn sync_search(query: &str) -> Vec<serde_json::Value> {
+/// Test helper: synchronous search.
+fn sync_search(query: &str) -> Vec<SearchResult> {
     let mut results = Vec::new();
     sakuin::internal::do_search_streaming(query, |batch| results.extend(batch))
         .unwrap_or_else(|e| panic!("search for {:?} failed: {}", query, e));
-    let json = serde_json::to_string(&results).unwrap();
-    serde_json::from_str(&json).unwrap()
+    results
 }
 
 /// Test helper: collect all file paths from search results.
-fn result_paths(results: &[serde_json::Value]) -> Vec<String> {
+fn result_paths(results: &[SearchResult]) -> Vec<String> {
     results
         .iter()
-        .filter_map(|r| r["path"].as_str().map(String::from))
+        .map(|r| r.path.clone())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect()
@@ -156,16 +147,9 @@ fn test_init_and_shutdown() {
         "Expected at least 1 search result for 'hello'"
     );
 
-    // Verify result structure
     let first = &results[0];
-    assert!(first.get("path").is_some(), "Result should have 'path'");
-    assert!(first.get("line").is_some(), "Result should have 'line'");
-    assert!(first.get("col").is_some(), "Result should have 'col'");
-    assert!(
-        first.get("snippet").is_some(),
-        "Result should have 'snippet'"
-    );
-    assert!(first.get("score").is_some(), "Result should have 'score'");
+    assert!(!first.path.is_empty() && first.line >= 1, "{first:?}");
+    assert!(first.snippet.to_lowercase().contains("hello"), "{first:?}");
 
     // Shutdown
     sakuin::sakuin_shutdown();
@@ -432,13 +416,8 @@ fn test_search_empty_angle_brackets() {
     let project = create_code_project();
     init_and_build(&project);
 
-    // "Vec3<>" should not crash. Since no file literally contains "Vec3<>",
-    // it correctly returns no results. Users should search "Vec3" or "Vec3<"
-    // for broader matches.
-    let results = sync_search("Vec3<>");
-    // Just verify it doesn't panic — empty results are expected here since
-    // the test files contain "Vec3<T>" and "Vec3<f32>", not literal "Vec3<>".
-    let _ = results;
+    // The files contain "Vec3<T>" and "Vec3<f32>", never a literal "Vec3<>".
+    assert!(sync_search("Vec3<>").is_empty());
 
     sakuin::sakuin_shutdown();
 }
@@ -1080,25 +1059,13 @@ fn create_git_project_for_e2e() -> TempDir {
 }
 
 /// Helper: init + build index on a git project.
-fn init_and_build_git(project: &TempDir) {
-    let root = project.path();
-    let index_dir = root.join(".sakuin");
-    let c_root = CString::new(root.to_str().unwrap()).unwrap();
-    let c_idx = CString::new(index_dir.to_str().unwrap()).unwrap();
-
-    sakuin::sakuin_init(c_root.as_ptr(), c_idx.as_ptr(), std::ptr::null())
-        .into_result()
-        .expect("sakuin_init should succeed");
-
-    sakuin::internal::build_index().expect("build_index should succeed");
-}
 
 #[test]
 #[serial]
 fn test_e2e_git_new_file_then_update() {
     let project = create_git_project_for_e2e();
     let root = project.path();
-    init_and_build_git(&project);
+    init_and_build(&project);
 
     // Verify initial content is indexed
     let results = sync_search("original_function");
@@ -1183,7 +1150,7 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
         .unwrap();
 
     // On main: lib.rs has original_function, extra.rs doesn't exist
-    init_and_build_git(&project);
+    init_and_build(&project);
 
     let results = sync_search("original_function");
     assert!(!results.is_empty(), "Should find original_function on main");
@@ -1260,7 +1227,7 @@ fn test_e2e_git_branch_switch_modifies_and_deletes() {
 fn test_e2e_git_file_deleted_then_update() {
     let project = create_git_project_for_e2e();
     let root = project.path();
-    init_and_build_git(&project);
+    init_and_build(&project);
 
     // Verify lib.rs content is indexed
     let results = sync_search("original_function");

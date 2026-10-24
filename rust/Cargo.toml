@@ -2,6 +2,7 @@
 name = "sakuin"
 version = "1.1.0"
 edition = "2021"
+rust-version = "1.87"
 description = "Indexed full-text search engine for Neovim, powered by Tantivy"
 license = "MIT"
 
@@ -12,13 +13,17 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "sakuin-cli"
 path = "cli/main.rs"
+required-features = ["cli"]
+
+[features]
+# Deps only the debug CLI needs, kept out of the Neovim cdylib build.
+cli = ["dep:clap", "dep:env_logger"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 tantivy = "0.26.1"
 rayon = "1.10"
 notify = { version = "8.2.0", features = ["macos_fsevent"] }
-notify-debouncer-full = "0.7.0"
 ignore = "0.4"
 git2 = { version = "0.21", default-features = false }
 serde = { version = "1", features = ["derive"] }
@@ -26,7 +31,7 @@ serde_json = "1"
 toml = "1"
 parking_lot = "0.12"
 log = "0.4"
-env_logger = "0.11"
+env_logger = { version = "0.11", optional = true }
 libc = "0.2"
 
 [target.'cfg(not(target_os = "openbsd"))'.dependencies]
@@ -37,7 +42,6 @@ tempfile = "3"
 serial_test = "4"
 
 [profile.release]
-opt-level = 3
 lto = "thin"
 strip = true
 codegen-units = 1

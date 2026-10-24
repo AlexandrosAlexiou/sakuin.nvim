@@ -69,17 +69,13 @@ mod ffi_exports {
                     error: None,
                     message: None,
                 }),
-                Err(e) => {
-                    prog.status
-                        .store(indexing::PROGRESS_ERROR, Ordering::SeqCst);
-                    bridge::push_indexing_event(bridge::IndexingEvent {
-                        status: "error",
-                        total: prog.total.load(Ordering::Relaxed),
-                        done: prog.done.load(Ordering::Relaxed),
-                        error: Some(e),
-                        message: None,
-                    });
-                }
+                Err(e) => bridge::push_indexing_event(bridge::IndexingEvent {
+                    status: "error",
+                    total: prog.total.load(Ordering::Relaxed),
+                    done: prog.done.load(Ordering::Relaxed),
+                    error: Some(e),
+                    message: None,
+                }),
             }
         }));
     }
@@ -256,9 +252,7 @@ pub use ffi_exports::*;
 /// Internal API for the debug CLI binary and integration tests.
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::indexing::{
-        build_index, progress, update_index, PROGRESS_DONE, PROGRESS_ERROR, PROGRESS_RUNNING,
-    };
+    pub use crate::indexing::{build_index, update_index};
     pub use crate::state::{do_search_streaming, init, shutdown, stats};
-    pub use crate::types::{IndexStats, SakuinConfig, SearchResult};
+    pub use crate::types::SearchResult;
 }

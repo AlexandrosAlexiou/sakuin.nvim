@@ -24,9 +24,8 @@ impl WatcherHandle {
     }
 }
 
-pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHandle, String> {
+pub fn start_watching(project_root: &Path) -> Result<WatcherHandle, String> {
     let project_root = project_root.to_path_buf();
-    let index_dir = index_dir.to_path_buf();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_clone = stop_flag.clone();
 
@@ -36,7 +35,7 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
         move |res| {
             let _ = tx.send(res);
         },
-        Config::default().with_poll_interval(Duration::from_secs(2)),
+        Config::default(),
     )
     .map_err(|e| format!("Failed to create file watcher: {}", e))?;
 
@@ -44,9 +43,8 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
         .watch(&project_root, RecursiveMode::Recursive)
         .map_err(|e| format!("Failed to start watching {:?}: {}", project_root, e))?;
 
-    let index_dir_clone = index_dir.clone();
     let thread = std::thread::spawn(move || {
-        process_events(rx, stop_flag_clone, &project_root, &index_dir_clone);
+        process_events(rx, stop_flag_clone, &project_root);
     });
 
     Ok(WatcherHandle {
@@ -60,7 +58,6 @@ fn process_events(
     rx: std::sync::mpsc::Receiver<notify::Result<Event>>,
     stop_flag: Arc<AtomicBool>,
     project_root: &Path,
-    index_dir: &Path,
 ) {
     use std::collections::HashSet;
 
@@ -121,9 +118,6 @@ fn process_events(
                 Err(_) => break,
             }
         }
-
-        paths_to_reindex.retain(|p| !p.starts_with(index_dir));
-        paths_to_remove.retain(|p| !p.starts_with(index_dir));
 
         handle_file_events(paths_to_reindex, paths_to_remove);
         if git_sentinel_changed && git::current_head_oid(project_root) != last_head_oid {
