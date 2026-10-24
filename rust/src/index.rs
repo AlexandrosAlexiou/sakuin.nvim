@@ -74,13 +74,6 @@ pub fn open_or_create_index(index_dir: &Path) -> Result<Index, String> {
     fs::create_dir_all(&index_path)
         .map_err(|e| format!("Failed to create index directory {:?}: {}", index_path, e))?;
 
-    // Any writer lock at startup is stale — we are always the sole writer.
-    let lock_path = index_path.join(".tantivy-writer.lock");
-    if lock_path.exists() {
-        log::info!("Removing stale writer lock: {:?}", lock_path);
-        let _ = fs::remove_file(&lock_path);
-    }
-
     let schema = build_schema();
     let dir = MmapDirectory::open(&index_path)
         .map_err(|e| format!("Failed to open MmapDirectory {:?}: {}", index_path, e))?;
@@ -116,7 +109,13 @@ pub fn create_writer(index: &Index) -> Result<IndexWriter, String> {
         .min(WRITER_MAX_THREADS);
     index
         .writer_with_num_threads(threads, threads * WRITER_HEAP_PER_THREAD)
-        .map_err(|e| format!("Failed to create IndexWriter: {}", e))
+        .map_err(|e| match e {
+            // The lock is an OS flock, so it's only held by a live process.
+            tantivy::TantivyError::LockFailure(..) => {
+                "Index is in use by another sakuin instance (Neovim or CLI)".to_string()
+            }
+            e => format!("Failed to create IndexWriter: {}", e),
+        })
 }
 
 pub fn create_reader(index: &Index) -> Result<IndexReader, String> {
@@ -138,15 +137,14 @@ pub struct PreparedDoc {
     pub size: u64,
 }
 
-pub fn rel_path(project_root: &Path, path: &Path) -> String {
+pub fn rel_path(project_root: &Path, path: &Path) -> Result<String, String> {
     path.strip_prefix(project_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string()
+        .map(|r| r.to_string_lossy().into_owned())
+        .map_err(|_| format!("{:?} is outside project root {:?}", path, project_root))
 }
 
 pub fn prepare_doc(project_root: &Path, file_path: &Path) -> Result<PreparedDoc, String> {
-    let relative = rel_path(project_root, file_path);
+    let relative = rel_path(project_root, file_path)?;
 
     let filename = file_path
         .file_name()
@@ -289,5 +287,22 @@ pub fn compute_stats(
         num_segments,
         index_size_bytes,
         project_root: project_root.to_string_lossy().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_writer_on_same_index_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = create_writer(&open_or_create_index(dir.path()).unwrap()).unwrap();
+        let Err(err) = create_writer(&open_or_create_index(dir.path()).unwrap()) else {
+            panic!("second writer acquired the lock");
+        };
+        assert!(err.contains("in use"), "{err}");
+        drop(first);
+        create_writer(&open_or_create_index(dir.path()).unwrap()).unwrap();
     }
 }

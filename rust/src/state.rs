@@ -62,7 +62,10 @@ pub(crate) fn search_executor() -> Executor {
 
 /// Must be called before any other operation.
 pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> Result<(), String> {
-    let project_root = PathBuf::from(project_root);
+    // Canonical, because FSEvents reports realpaths (/tmp → /private/tmp,
+    // symlinked dirs) and every watcher path is made relative to this.
+    let project_root = std::fs::canonicalize(project_root)
+        .map_err(|e| format!("Invalid project root {:?}: {}", project_root, e))?;
     let index_dir = PathBuf::from(index_dir);
 
     let mut config = match config_json {

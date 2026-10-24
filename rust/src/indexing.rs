@@ -13,7 +13,7 @@ use tantivy::{IndexReader, IndexWriter};
 
 use crate::bridge::{push_indexing_event, IndexingEvent};
 use crate::index;
-use crate::state::{global_state, snapshot};
+use crate::state::snapshot;
 use crate::walker;
 
 pub const PROGRESS_RUNNING: u64 = 1;
@@ -221,8 +221,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 
     let disk_set: HashSet<String> = files_on_disk
         .iter()
-        .filter_map(|p| p.strip_prefix(&s.project_root).ok())
-        .map(|r| r.to_string_lossy().to_string())
+        .filter_map(|p| index::rel_path(&s.project_root, p).ok())
         .collect();
 
     let mut removed: u64 = 0;
@@ -239,7 +238,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
     let files_to_index: Vec<(PathBuf, bool)> = files_on_disk
         .into_iter()
         .filter_map(|file_path| {
-            let rel = index::rel_path(&s.project_root, &file_path);
+            let rel = index::rel_path(&s.project_root, &file_path).ok()?;
             let disk_mtime = std::fs::metadata(&file_path)
                 .and_then(|m| m.modified())
                 .ok()
@@ -262,7 +261,7 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
         let w = s.writer.read();
         for (path, is_update) in &files_to_index {
             if *is_update {
-                index::delete_by_path(&w, &s.schema, &index::rel_path(&s.project_root, path));
+                index::delete_by_path(&w, &s.schema, &index::rel_path(&s.project_root, path)?);
             }
         }
     }
@@ -298,47 +297,39 @@ pub fn update_index() -> Result<(u64, u64, u64), String> {
 }
 
 pub fn batch_update_files(to_remove: &[PathBuf], to_reindex: &[PathBuf]) -> Result<(), String> {
-    let guard = global_state().lock();
-    let state = guard.as_ref().ok_or("sakuin not initialized")?;
-
-    let writer = state.writer.read();
+    // Snapshot, not the global lock: a branch switch can touch thousands of
+    // files, and search_submit takes that lock on every keystroke.
+    let s = snapshot()?;
+    let filter = crate::path_filter::PathFilter::new(&s.project_root, &s.config);
+    let writer = s.writer.read();
     let mut changed = false;
 
-    // Removals stay unfiltered so a now-ignored file still gets evicted.
-    for path in to_remove {
-        index::delete_by_path(
-            &writer,
-            &state.schema,
-            &index::rel_path(&state.project_root, path),
-        );
-        changed = true;
-        log::debug!("Watcher: removed {:?}", path);
+    // Delete everything before the indexable check, so a file that became
+    // ignored, binary or too large is evicted instead of staying searchable.
+    for path in to_remove.iter().chain(to_reindex) {
+        match index::rel_path(&s.project_root, path) {
+            Ok(rel) => {
+                index::delete_by_path(&writer, &s.schema, &rel);
+                changed = true;
+            }
+            Err(e) => log::warn!("Watcher: {}", e),
+        }
     }
 
-    let filter = crate::path_filter::PathFilter::new(&state.project_root, &state.config);
     for path in to_reindex {
         if !filter.is_indexable(path) {
             log::debug!("Watcher: skipping non-indexable {:?}", path);
             continue;
         }
-        // Delete stale doc first (no-op if the file is new).
-        index::delete_by_path(
-            &writer,
-            &state.schema,
-            &index::rel_path(&state.project_root, path),
-        );
-        match index::index_file(&writer, &state.schema, &state.project_root, path) {
-            Ok(()) => {
-                changed = true;
-                log::debug!("Watcher: reindexed {:?}", path);
-            }
+        match index::index_file(&writer, &s.schema, &s.project_root, path) {
+            Ok(()) => log::debug!("Watcher: reindexed {:?}", path),
             Err(e) => log::warn!("Watcher: failed to reindex {:?}: {}", path, e),
         }
     }
 
     if changed {
         drop(writer);
-        commit_and_reload(&state.writer, &state.reader)?;
+        commit_and_reload(&s.writer, &s.reader)?;
     }
 
     Ok(())
