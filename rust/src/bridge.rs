@@ -71,8 +71,8 @@ struct AsyncNotifier {
 }
 
 // Safety: Raw pointers aren't Send, but we need it for the static Mutex.
-// The uv_async_t handle lives for the Neovim process lifetime, and
-// uv_async_send is the only thread-safe libuv function.
+// The handle stays valid until `clear_async_notifier` (called from shutdown,
+// before Lua closes it), and uv_async_send is the only thread-safe libuv function.
 unsafe impl Send for AsyncNotifier {}
 
 static ASYNC_NOTIFIER: OnceLock<Mutex<Option<AsyncNotifier>>> = OnceLock::new();
@@ -96,6 +96,14 @@ pub fn register_async_notifier(
         handle: handle_ptr,
         send_fn: send_fn_ptr,
     });
+}
+
+/// Forget the handle and drop undelivered messages. Taking the lock waits out
+/// any in-flight `uv_async_send`, so the caller may close the handle afterwards.
+pub(crate) fn clear_async_notifier() {
+    *async_notifier().lock() = None;
+    indexing_event_slot().lock().take();
+    search_result_queue().lock().clear();
 }
 
 pub(crate) fn notify_main_thread() {

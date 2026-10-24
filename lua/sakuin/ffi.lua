@@ -290,11 +290,16 @@ function M.init(project_root, index_dir, config_json)
 	return true, nil
 end
 
+-- sakuin_shutdown joins every native thread, so the async handle is safe to close
+-- after it returns. Any pending terminal events are dropped, so reset their consumers.
 function M.shutdown()
 	initialized = false
 	if lib then lib.sakuin_shutdown() end
 	if async_handle and not async_handle:is_closing() then async_handle:close() end
 	async_handle = nil
+	lua_indexing_callback = nil
+	search_callbacks = {}
+	require("sakuin.progress").is_indexing = false
 end
 
 --- Reinitialize for a new project root. Shuts down the current state,

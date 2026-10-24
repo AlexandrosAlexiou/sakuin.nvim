@@ -34,6 +34,7 @@ struct SearchWorker {
     /// Cancel flag for the currently executing search. When a new request arrives,
     /// the worker sets this to true so the old search exits early.
     cancel_flag: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 static SEARCH_WORKER: OnceLock<Mutex<Option<SearchWorker>>> = OnceLock::new();
@@ -53,7 +54,7 @@ fn ensure_worker() {
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_flag_clone = cancel_flag.clone();
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("sakuin-search-worker".into())
         .spawn(move || {
             worker_loop(rx, cancel_flag_clone);
@@ -63,6 +64,7 @@ fn ensure_worker() {
     *guard = Some(SearchWorker {
         sender: tx,
         cancel_flag,
+        thread,
     });
 }
 
@@ -201,9 +203,11 @@ pub fn search_cancel() {
 }
 
 pub(crate) fn shutdown() {
-    let mut guard = search_worker_state().lock();
-    if let Some(worker) = guard.take() {
+    let worker = search_worker_state().lock().take();
+    if let Some(worker) = worker {
         worker.cancel_flag.store(true, Ordering::SeqCst);
-        // Dropping worker disconnects the channel; worker_loop exits on Err(_).
+        // Disconnecting the channel makes worker_loop exit on Err(_).
+        drop(worker.sender);
+        let _ = worker.thread.join();
     }
 }

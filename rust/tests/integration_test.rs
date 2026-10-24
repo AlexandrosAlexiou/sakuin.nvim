@@ -882,6 +882,31 @@ fn test_async_build_index() {
     sakuin::sakuin_shutdown();
 }
 
+/// Lua closes the uv handle right after sakuin_shutdown, so no thread may
+/// wake it afterwards, and the next session must not see stale events.
+#[test]
+#[serial]
+fn test_shutdown_during_async_build_is_quiet() {
+    let project = create_test_project();
+    init_only(&project);
+    sakuin::sakuin_register_async_notifier(
+        0xDEAD_BEEF_usize as *mut std::os::raw::c_void,
+        fake_uv_async_send as unsafe extern "C" fn(*mut std::os::raw::c_void) -> i32,
+    );
+    sakuin::sakuin_build_index_async().into_result().unwrap();
+    sakuin::sakuin_shutdown();
+
+    reset_notify_state();
+    assert!(!wait_for_notification(std::time::Duration::from_millis(
+        300
+    )));
+    assert!(sakuin::sakuin_indexing_take_event().is_null());
+
+    // Same index dir is reusable straight away (writer lock released).
+    init_only(&project);
+    sakuin::sakuin_shutdown();
+}
+
 #[test]
 #[serial]
 fn test_async_update_index() {

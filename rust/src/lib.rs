@@ -59,7 +59,7 @@ mod ffi_exports {
         F: FnOnce() -> Result<u64, String> + Send + 'static,
     {
         use std::sync::atomic::Ordering;
-        std::thread::spawn(move || {
+        indexing::track_thread(std::thread::spawn(move || {
             let prog = indexing::progress();
             match f() {
                 Ok(done) => bridge::push_indexing_event(bridge::IndexingEvent {
@@ -81,7 +81,7 @@ mod ffi_exports {
                     });
                 }
             }
-        });
+        }));
     }
 
     #[no_mangle]

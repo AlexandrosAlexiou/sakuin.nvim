@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -9,13 +10,17 @@ use crate::git;
 
 /// Handle to a running filesystem watcher. Call `stop()` to shut it down.
 pub struct WatcherHandle {
-    _watcher: RecommendedWatcher,
+    watcher: RecommendedWatcher,
     stop_flag: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
 }
 
 impl WatcherHandle {
+    /// Blocks until the event thread exits. Don't hold the global state lock.
     pub fn stop(self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        drop(self.watcher);
+        let _ = self.thread.join();
     }
 }
 
@@ -40,13 +45,14 @@ pub fn start_watching(project_root: &Path, index_dir: &Path) -> Result<WatcherHa
         .map_err(|e| format!("Failed to start watching {:?}: {}", project_root, e))?;
 
     let index_dir_clone = index_dir.clone();
-    std::thread::spawn(move || {
+    let thread = std::thread::spawn(move || {
         process_events(rx, stop_flag_clone, &project_root, &index_dir_clone);
     });
 
     Ok(WatcherHandle {
-        _watcher: watcher,
+        watcher,
         stop_flag,
+        thread,
     })
 }
 

@@ -105,29 +105,23 @@ pub fn init(project_root: &str, index_dir: &str, config_json: Option<&str>) -> R
     Ok(())
 }
 
-/// Stop watcher, stop worker, commit pending writes, drop state.
+/// Join every background thread, commit pending writes, drop state. On return
+/// nothing will touch the registered uv handle, so Lua may close it.
 pub fn shutdown() {
-    // Tell any in-flight indexing to exit its loop and commit whatever it has
-    // done so far. Without this, shutdown() would block on global_state().lock()
-    // for the entire remaining duration of the index build/update.
-    crate::indexing::request_cancel();
-
+    crate::indexing::cancel_and_join();
     crate::search_worker::shutdown();
 
-    let mut guard = global_state().lock();
-    if let Some(state) = guard.take() {
-        {
-            let mut watcher_guard = state.watcher_handle.lock();
-            if let Some(handle) = watcher_guard.take() {
-                handle.stop();
-            }
+    // Release the global lock before joining the watcher: its batches take it.
+    let state = global_state().lock().take();
+    if let Some(state) = state {
+        if let Some(handle) = state.watcher_handle.lock().take() {
+            handle.stop();
         }
-        {
-            let mut writer = state.writer.write();
-            let _ = writer.commit();
-        }
+        let _ = state.writer.write().commit();
         log::info!("sakuin shut down");
     }
+
+    crate::bridge::clear_async_notifier();
 }
 
 /// Run a search against the global engine state, invoking `on_batch` from the
@@ -182,12 +176,12 @@ pub fn start_watcher() -> Result<(), String> {
 }
 
 pub fn stop_watcher() {
-    let guard = global_state().lock();
-    if let Some(state) = guard.as_ref() {
-        let mut watcher_guard = state.watcher_handle.lock();
-        if let Some(handle) = watcher_guard.take() {
-            handle.stop();
-            log::info!("File watcher stopped");
-        }
+    let handle = global_state()
+        .lock()
+        .as_ref()
+        .and_then(|s| s.watcher_handle.lock().take());
+    if let Some(handle) = handle {
+        handle.stop();
+        log::info!("File watcher stopped");
     }
 }

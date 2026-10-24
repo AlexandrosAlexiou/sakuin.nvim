@@ -4,8 +4,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::thread::JoinHandle;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 use tantivy::schema::Schema;
 use tantivy::{IndexReader, IndexWriter};
@@ -48,9 +49,28 @@ pub fn progress() -> &'static Progress {
     })
 }
 
-/// Ask any in-flight index build/update to stop early and commit what it has.
-pub(crate) fn request_cancel() {
+static INDEXING_THREADS: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
+
+pub(crate) fn track_thread(handle: JoinHandle<()>) {
+    let mut threads = INDEXING_THREADS.lock();
+    threads.retain(|h| !h.is_finished());
+    threads.push(handle);
+}
+
+pub(crate) fn is_cancelled() -> bool {
+    CANCEL_INDEXING.load(Ordering::Relaxed)
+}
+
+/// Make in-flight builds/updates stop early, commit what they have, and exit.
+/// The flag is only cleared once they're gone, so a job that hasn't reached
+/// its loop yet can't miss it.
+pub(crate) fn cancel_and_join() {
     CANCEL_INDEXING.store(true, Ordering::SeqCst);
+    let threads = std::mem::take(&mut *INDEXING_THREADS.lock());
+    for handle in threads {
+        let _ = handle.join();
+    }
+    CANCEL_INDEXING.store(false, Ordering::SeqCst);
 }
 
 fn emit_progress(total: u64, done: u64, message: Option<&str>) {
@@ -130,7 +150,7 @@ fn index_files<F>(
     F: Fn(bool) + Sync,
 {
     files.par_iter().for_each(|(file_path, is_update)| {
-        if CANCEL_INDEXING.load(Ordering::Relaxed) {
+        if is_cancelled() {
             return;
         }
         let count = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -152,7 +172,6 @@ fn index_files<F>(
 }
 
 fn begin_indexing() {
-    CANCEL_INDEXING.store(false, Ordering::SeqCst);
     let prog = progress();
     prog.status.store(PROGRESS_RUNNING, Ordering::SeqCst);
     prog.done.store(0, Ordering::SeqCst);

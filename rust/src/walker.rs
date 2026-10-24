@@ -44,6 +44,9 @@ pub fn walk_project(project_root: &Path, config: &SakuinConfig) -> Vec<PathBuf> 
         let files = &files;
         let include_extensions = &include_extensions;
         Box::new(move |entry| {
+            if crate::indexing::is_cancelled() {
+                return ignore::WalkState::Quit;
+            }
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => return ignore::WalkState::Continue,
