@@ -39,7 +39,8 @@ end, {
 vim.api.nvim_create_user_command("SakuinCword", function(opts)
 	if not search_preflight() then return end
 	local text = opts.range > 0 and get_visual_selection() or vim.fn.expand("<cword>")
-	if text and text ~= "" then require("sakuin.picker").sakuin({ search = text }) end
+	-- Code under the cursor is literal text, not a regex.
+	if text and text ~= "" then require("sakuin.picker").sakuin({ search = text .. " -- -F" }) end
 end, {
 	range = true,
 	desc = "Search word under cursor or visual selection with sakuin",

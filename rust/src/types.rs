@@ -7,6 +7,8 @@ pub struct SearchResult {
     pub col: u32,
     pub snippet: String,
     pub score: f32,
+    /// Byte ranges `[start, end)` of matches within `snippet`.
+    pub matches: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Clone)]

@@ -92,6 +92,9 @@ pub struct CSearchResult {
     pub line: u32,
     pub col: u32,
     pub score: f32,
+    /// Flat `[start, end)` byte pairs within `snippet`; `matches_len` counts u32s.
+    pub matches: *mut u32,
+    pub matches_len: u32,
 }
 
 #[repr(u8)]
@@ -141,6 +144,25 @@ pub struct CIndexStats {
     pub project_root: *const c_char,
 }
 
+/// Null for an empty vec. Freed by `free_u32s` with the same length.
+fn leak_u32s(v: Vec<u32>) -> *mut u32 {
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(v.into_boxed_slice()) as *mut u32
+}
+
+/// # Safety
+/// `ptr`/`len` must come from `leak_u32s`.
+pub(crate) unsafe fn free_u32s(ptr: *mut u32, len: u32) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            ptr,
+            len as usize,
+        )));
+    }
+}
+
 impl CSearchMessage {
     pub fn from_internal(msg: crate::bridge::SearchResultMessage) -> Self {
         use crate::bridge::SearchResultMessage;
@@ -159,6 +181,10 @@ impl CSearchMessage {
                         line: r.line,
                         col: r.col,
                         score: r.score,
+                        matches_len: (r.matches.len() * 2) as u32,
+                        matches: leak_u32s(
+                            r.matches.into_iter().flat_map(|(s, e)| [s, e]).collect(),
+                        ),
                     })
                     .collect();
                 let ptr = if c_results.is_empty() {

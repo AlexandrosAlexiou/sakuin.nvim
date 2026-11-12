@@ -7,6 +7,7 @@ mod indexing;
 mod logging;
 mod path_filter;
 mod project_config;
+mod query;
 mod search;
 mod search_worker;
 mod state;
@@ -160,6 +161,7 @@ mod ffi_exports {
                 for r in results {
                     ffi::free_c_string(r.path);
                     ffi::free_c_string(r.snippet);
+                    ffi::free_u32s(r.matches, r.matches_len);
                 }
             }
         }

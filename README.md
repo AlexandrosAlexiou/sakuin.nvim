@@ -191,6 +191,115 @@ editor preference, not a property of the repo.
 
 <br>
 
+## Searching
+
+Searching works like ripgrep (`rg`).
+
+- All lowercase ignores case: `config` finds `config`, `Config` and `CONFIG`.
+- Any uppercase letter makes it exact: `Config` finds only `Config`.
+
+To add options, type ` -- ` (space, two dashes, space) after your search, then
+the options. Everything goes in the picker's search box.
+
+### Only some files
+
+By language:
+
+```
+handler -- -t rust       only Rust files
+handler -- -t py         only Python files
+handler -- -t cpp        only C and C++ files
+handler -- -t go -t js   Go and JavaScript files
+handler -- -T js         all files except JavaScript
+```
+
+Run `rg --type-list` to see every language name.
+
+By file name or folder:
+
+```
+handler -- -g *.go                  only .go files
+handler -- -g src/**                only files inside src/
+handler -- -g !tests/**             skip everything in tests/
+handler -- -g *.ts -g !*.test.ts    .ts files, but not test files
+```
+
+`!` means "skip these".
+
+### Case, whole words, plain text
+
+```
+init -- -s        exactly "init", not "Init"
+Init -- -i        any case: init, Init, INIT
+init -- -w        "init" as a whole word, not "initialize"
+#endif -- -x      lines that are exactly "#endif"
+arr[0] -- -F      the text arr[0] exactly (no pattern)
+```
+
+Options can be mixed: `TaskRunner -- -w -t cpp -g base/**`
+
+### Patterns
+
+The search is a pattern (regex), like in ripgrep:
+
+```
+foo.*bar         foo, then anything, then bar, on the same line
+get|set          get or set
+colou?r          color or colour
+^import          lines that start with import
+;$               lines that end with ;
+\bid\b           "id" as its own word
+\d+              a number
+fn \w+_test      "fn " then a name ending in _test
+```
+
+These characters have a special meaning: `. * + ? ( ) [ ] { } | ^ $ \`.
+To search for them as normal text, add `-- -F`, or put `\` in front:
+`arr\[0\]`.
+
+Not supported: lookahead/lookbehind like `(?=...)`, backreferences like `\1`,
+and matches across more than one line. A search like that, or any broken
+pattern, is searched as plain text instead.
+
+### Where to type it
+
+- In the picker: `<leader>si`, then type.
+- As a command: `:Sakuin handler -- -t rust`
+- In a keymap:
+
+  ```lua
+  vim.keymap.set("n", "<leader>sr", function()
+    require("sakuin.picker").sakuin({ search = " -- -t rust" })
+  end, { desc = "Sakuin: Rust files" })
+  ```
+
+`<leader>sW` (word under cursor) searches it as plain text, never as a pattern.
+
+### All options
+
+<table>
+<tr><th>option</th><th>long form</th><th>what it does</th></tr>
+<tr><td><code>-t NAME</code></td><td><code>--type</code></td><td>Only files of this language</td></tr>
+<tr><td><code>-T NAME</code></td><td><code>--type-not</code></td><td>Skip files of this language</td></tr>
+<tr><td><code>-g GLOB</code></td><td><code>--glob</code></td><td>Only files matching the name or path; <code>!GLOB</code> skips them</td></tr>
+<tr><td><code>-F</code></td><td><code>--fixed-strings</code></td><td>Plain text, not a pattern</td></tr>
+<tr><td><code>-w</code></td><td><code>--word-regexp</code></td><td>Whole words only</td></tr>
+<tr><td><code>-x</code></td><td><code>--line-regexp</code></td><td>Whole lines only</td></tr>
+<tr><td><code>-i</code></td><td><code>--ignore-case</code></td><td>Ignore case</td></tr>
+<tr><td><code>-s</code></td><td><code>--case-sensitive</code></td><td>Exact case</td></tr>
+<tr><td><code>-S</code></td><td><code>--smart-case</code></td><td>Exact case only if you type an uppercase letter (the default)</td></tr>
+</table>
+
+Short options can be joined: `-Fw` is `-F -w`.
+
+### Speed
+
+A search is fast when it has 3 or more normal characters in a row, like
+`handler` or `foo.*bar`. A search with none, like `\w+_\d+`, has to read every
+file, so it is slower on big projects.
+
+<br>
+
 ## Commands
 
 <table>

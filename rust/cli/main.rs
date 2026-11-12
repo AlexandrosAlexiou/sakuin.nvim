@@ -156,7 +156,7 @@ fn main() {
                         if r.line == 0 {
                             continue;
                         }
-                        let snippet = style.highlight(r.snippet.trim(), &query);
+                        let snippet = style.highlight(&r.snippet, &r.matches);
                         let _ = writeln!(
                             out,
                             "{}:{}:{}",
@@ -165,7 +165,7 @@ fn main() {
                             snippet
                         );
                     } else {
-                        let snippet = style.highlight(r.snippet.trim(), &query);
+                        let snippet = style.highlight(&r.snippet, &r.matches);
                         let _ = writeln!(
                             out,
                             "{}:{}:{}  {}",
@@ -265,31 +265,20 @@ impl Style {
         self.wrap("32", &n.to_string())
     }
 
-    /// Mirrors the ASCII-case-insensitive matching in `search::find_matching_lines`
-    /// so highlighted spans line up with what the search verifier actually matched.
-    fn highlight(&self, snippet: &str, needle: &str) -> String {
-        if !self.color || needle.is_empty() {
+    /// `matches` are the snippet byte ranges reported by the search.
+    fn highlight(&self, snippet: &str, matches: &[(u32, u32)]) -> String {
+        if !self.color || matches.is_empty() {
             return snippet.to_string();
         }
-        let mut needle_lc = needle.to_string();
-        needle_lc.make_ascii_lowercase();
-        let n = needle_lc.len();
-        if n == 0 {
-            return snippet.to_string();
-        }
-        let mut hay_lc = snippet.to_string();
-        hay_lc.make_ascii_lowercase();
-
         let mut out = String::with_capacity(snippet.len() + 16);
         let mut cursor = 0;
-        while let Some(pos) = hay_lc[cursor..].find(&needle_lc) {
-            let start = cursor + pos;
-            let end = start + n;
-            out.push_str(&snippet[cursor..start]);
+        for &(s, e) in matches {
+            let (s, e) = (s as usize, e as usize);
+            out.push_str(&snippet[cursor..s]);
             out.push_str("\x1b[1;31m");
-            out.push_str(&snippet[start..end]);
+            out.push_str(&snippet[s..e]);
             out.push_str("\x1b[0m");
-            cursor = end;
+            cursor = e;
         }
         out.push_str(&snippet[cursor..]);
         out

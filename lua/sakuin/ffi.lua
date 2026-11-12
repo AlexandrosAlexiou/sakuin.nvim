@@ -17,6 +17,8 @@ ffi.cdef([[
     uint32_t    line;
     uint32_t    col;
     float       score;
+    uint32_t*   matches;
+    uint32_t    matches_len;
   } SakuinSearchResult;
 
   typedef struct {
@@ -141,7 +143,15 @@ local function decode_search_message(ptr)
 		local len = tonumber(ptr.results_len)
 		for i = 0, len - 1 do
 			local r = ptr.results[i]
+			-- 1-based byte positions of matched bytes within the snippet.
+			local positions = {}
+			for j = 0, tonumber(r.matches_len) - 1, 2 do
+				for b = r.matches[j] + 1, r.matches[j + 1] do
+					positions[#positions + 1] = b
+				end
+			end
 			results[#results + 1] = {
+				positions = positions,
 				path = safe_str(r.path),
 				snippet = safe_str(r.snippet),
 				line = tonumber(r.line),
