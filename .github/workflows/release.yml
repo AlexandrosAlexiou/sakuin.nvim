@@ -192,7 +192,8 @@ jobs:
             sudo pkg_add -I rust
             rustc -vV
             cd rust
-            cargo build --release --lib
+            # pkg_add ships rustc 1.90; prefer deps that fit rust-version over the newest
+            CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo build --release --lib
 
       - name: Stage artifact
         run: |
