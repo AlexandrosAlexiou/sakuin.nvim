@@ -18,9 +18,7 @@ local level_hl = {
 }
 
 ---@return string
-local function log_file_path()
-	return require("sakuin.config").get().log_file
-end
+local function log_file_path() return require("sakuin.config").get().log_file end
 
 ---@return string[]
 local function read_log_file()

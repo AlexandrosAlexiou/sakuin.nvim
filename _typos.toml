@@ -1,0 +1,3 @@
+[default.extend-words]
+# Latin-1 "café" test fixture in rust/src/index.rs
+caf = "caf"

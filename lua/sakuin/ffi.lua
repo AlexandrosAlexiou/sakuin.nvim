@@ -198,9 +198,7 @@ local function decode_indexing_event(ptr)
 end
 
 -- Already on the main loop (on_async_notification runs from vim.schedule).
-local function report_callback_error(err)
-	vim.notify("[sakuin] callback error: " .. tostring(err), vim.log.levels.ERROR)
-end
+local function report_callback_error(err) vim.notify("[sakuin] callback error: " .. tostring(err), vim.log.levels.ERROR) end
 
 local function dispatch_search_msg(msg)
 	local callback = search_callbacks[msg.generation]
